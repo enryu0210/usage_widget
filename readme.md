@@ -2,6 +2,10 @@
 
 Claude, Codex, Gemini 및 Argon(`Gemini 4 Argon`) 계정을 연동하여 각 서비스의 실시간 잔여 사용량(%)과 초기화까지 남은 시간을 바탕화면에 띄워주는 경량 Windows 위젯입니다.
 
+## 다운로드
+[Releases](https://github.com/enryu0210/usage_widget/releases/latest) 에서 `AIUsageWidget.exe` 를 내려받아 실행하면 됩니다(파이썬 불필요).
+처음 실행 시 시작 프로그램에 자동 등록되고 트레이에 아이콘이 뜹니다. 서명되지 않은 exe 라 SmartScreen 경고가 뜨면 **추가 정보 → 실행** 을 누르세요.
+
 ## 프로젝트 폴더 구조
 ```text
 usage_widget/
