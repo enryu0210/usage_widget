@@ -253,8 +253,51 @@ def _extract_antigravity_refresh_token() -> str | None:
     return None
 
 
+def _extract_credman_refresh_token() -> str | None:
+    """Windows 자격 증명 관리자(gemini:antigravity)에서 refresh_token을 추출한다.
+
+    agy CLI만 설치·로그인된 환경에서도 별도 로그인 없이 즉시 연동되도록 지원한다.
+    """
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        class _CREDENTIALW(ctypes.Structure):
+            _fields_ = [
+                ("Flags", ctypes.wintypes.DWORD),
+                ("Type", ctypes.wintypes.DWORD),
+                ("TargetName", ctypes.wintypes.LPWSTR),
+                ("Comment", ctypes.wintypes.LPWSTR),
+                ("LastWritten", ctypes.wintypes.FILETIME),
+                ("CredentialBlobSize", ctypes.wintypes.DWORD),
+                ("CredentialBlob", ctypes.POINTER(ctypes.c_byte)),
+                ("Persist", ctypes.wintypes.DWORD),
+                ("AttributeCount", ctypes.wintypes.DWORD),
+                ("Attributes", ctypes.c_void_p),
+                ("TargetAlias", ctypes.wintypes.LPWSTR),
+                ("UserName", ctypes.wintypes.LPWSTR),
+            ]
+
+        advapi32 = ctypes.WinDLL("advapi32.dll")
+        pcred = ctypes.POINTER(_CREDENTIALW)()
+        if not advapi32.CredReadW("gemini:antigravity", 1, 0, ctypes.byref(pcred)):
+            return None
+        try:
+            blob = ctypes.string_at(
+                pcred.contents.CredentialBlob, pcred.contents.CredentialBlobSize
+            ).decode("utf-8", "ignore")
+        finally:
+            advapi32.CredFree(pcred)
+        raw = json.loads(blob)
+        tok_obj = raw.get("token") if isinstance(raw.get("token"), dict) else raw
+        rt = tok_obj.get("refresh_token")
+        return str(rt) if rt else None
+    except Exception:
+        return None
+
+
 def _get_gemini_refresh_token() -> str | None:
-    """위젯 전용 저장소 -> Antigravity IDE 순서로 Gemini refresh_token을 찾는다."""
+    """위젯 전용 저장소 -> Windows 자격 증명 관리자 -> Antigravity IDE 순서로 토큰을 찾는다."""
     saved = WIDGET_CONFIG_DIR / "gemini_oauth.json"
     if saved.exists():
         try:
@@ -263,18 +306,25 @@ def _get_gemini_refresh_token() -> str | None:
                 return str(tok)
         except Exception:
             pass
-    return _extract_antigravity_refresh_token()
+    return _extract_credman_refresh_token() or _extract_antigravity_refresh_token()
 
 
-def fetch_gemini() -> ProviderStatus:
-    """Google Code Assist (Antigravity) API를 통해 Gemini 모델 잔여 쿼터를 조회한다."""
+def fetch_gemini_and_argon() -> tuple[ProviderStatus, ProviderStatus]:
+    """Google Code Assist (Antigravity) API에서 Gemini 일반 모델과 Gemini 4 Argon 잔여량을 분리 조회한다.
+
+    단일 API 호출(retrieveUserQuotaSummary)로 두 그룹 데이터를 모두 받아와
+    불필요한 중복 네트워크 왕복을 방지하고 UI에는 별도 카드로 분리해 제공한다.
+    """
     refresh_token = _get_gemini_refresh_token()
     if not refresh_token:
-        return ProviderStatus("Gemini", False, error="계정 미연동 ([연동] 클릭)")
+        return (
+            ProviderStatus("Gemini", False, error="계정 미연동 ([계정 연동] 클릭)"),
+            ProviderStatus("Argon", False, error="Gemini 계정 연동 시 함께 표시됨"),
+        )
 
     try:
         client_id, client_secret = _get_gemini_oauth_client()
-        tok_Form = urllib.parse.urlencode(
+        tok_form = urllib.parse.urlencode(
             {
                 "client_id": client_id,
                 "client_secret": client_secret,
@@ -282,14 +332,18 @@ def fetch_gemini() -> ProviderStatus:
                 "grant_type": "refresh_token",
             }
         ).encode("utf-8")
-        tok_res = _http_json("https://oauth2.googleapis.com/token", method="POST", data=tok_Form)
+        tok_res = _http_json("https://oauth2.googleapis.com/token", method="POST", data=tok_form)
         access_token = tok_res["access_token"]
 
         ca_headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
-            # 개인용 Google AI / Code Assist 쿼터 엔드포인트는 Antigravity UA를 요구한다.
-            "User-Agent": "antigravity/1.20.3 windows/amd64",
+            # 서버가 Gemini Models 및 Gemini 4 Argon 버킷을 모두 내려주려면
+            # Antigravity CLI 형식의 User-Agent와 최신 빌드 CL 번호가 포함되어야 한다.
+            "User-Agent": (
+                "antigravity/cli/1.4.2 "
+                "(aidev_client; os_type=windows; arch=amd64; cl=1001597273; auth_method=consumer)"
+            ),
         }
 
         load_res = _http_json(
@@ -312,34 +366,59 @@ def fetch_gemini() -> ProviderStatus:
         plan = str(paid_tier.get("name") or current_tier.get("name") or "Gemini").upper()
         project = load_res.get("cloudaicompanionProject") or "aicode-consumers"
 
-        quota_res = _http_json(
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
+        summary_res = _http_json(
+            "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
             method="POST",
             headers=ca_headers,
             data=json.dumps({"project": project}).encode("utf-8"),
         )
 
-        # Gemini 계열 모델들의 최저 잔여율과 초기화 시각을 집계한다.
-        gemini_buckets = [
-            b
-            for b in (quota_res.get("buckets") or [])
-            if str(b.get("modelId") or "").startswith("gemini-")
-            and b.get("remainingFraction") is not None
-        ]
-        metrics: list[QuotaMetric] = []
-        if gemini_buckets:
-            # 가장 많이 소진된(잔여율이 가장 낮은) 메인 Gemini 버킷을 기준으로 표시한다.
-            primary = min(gemini_buckets, key=lambda b: float(b["remainingFraction"]))
-            rem = max(0.0, min(100.0, float(primary["remainingFraction"]) * 100.0))
-            metrics.append(
-                QuotaMetric("5시간 모델 쿼터 잔여", rem, _format_reset(primary.get("resetTime")))
-            )
+        gemini_metrics: list[QuotaMetric] = []
+        argon_metrics: list[QuotaMetric] = []
 
-        return ProviderStatus("Gemini", True, plan=plan, metrics=metrics)
+        # 5시간 한도를 위쪽에, 주간 한도를 아래쪽에 일관되게 배치한다.
+        window_labels = {"5h": "5시간 한도 잔여", "weekly": "7일 주간 잔여"}
+        window_order = {"5h": 0, "weekly": 1}
+
+        for grp in summary_res.get("groups") or []:
+            gname = str(grp.get("displayName") or "")
+            buckets = sorted(
+                grp.get("buckets") or [],
+                key=lambda b: window_order.get(str(b.get("window") or ""), 99),
+            )
+            for b in buckets:
+                if b.get("remainingFraction") is None:
+                    continue
+                rem = max(0.0, min(100.0, float(b["remainingFraction"]) * 100.0))
+                win = str(b.get("window") or "")
+                label = window_labels.get(win, str(b.get("displayName") or "쿼터 잔여"))
+                metric = QuotaMetric(label, rem, _format_reset(b.get("resetTime")))
+
+                if "Argon" in gname or "argon" in str(b.get("bucketId") or ""):
+                    argon_metrics.append(metric)
+                elif "Gemini" in gname or str(b.get("bucketId") or "").startswith("gemini-"):
+                    gemini_metrics.append(metric)
+
+        gemini_status = ProviderStatus("Gemini", True, plan=plan, metrics=gemini_metrics)
+        if argon_metrics:
+            argon_status = ProviderStatus("Argon", True, plan="GEMINI 4", metrics=argon_metrics)
+        else:
+            argon_status = ProviderStatus(
+                "Argon", False, plan="GEMINI 4", error="Argon 별도 쿼터 대상 요금제가 아님"
+            )
+        return gemini_status, argon_status
     except urllib.error.HTTPError as e:
-        return ProviderStatus("Gemini", False, error=f"API 오류 ({e.code}) - 재연동 필요")
+        err_msg = f"API 오류 ({e.code}) - 재연동 필요"
+        return (
+            ProviderStatus("Gemini", False, error=err_msg),
+            ProviderStatus("Argon", False, error=err_msg),
+        )
     except Exception as e:
-        return ProviderStatus("Gemini", False, error=f"조회 실패: {e}")
+        err_msg = f"조회 실패: {e}"
+        return (
+            ProviderStatus("Gemini", False, error=err_msg),
+            ProviderStatus("Argon", False, error=err_msg),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +456,11 @@ def link_gemini_oauth(timeout_sec: int = 120) -> bool:
             "client_id": client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            "scope": "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email",
+            "scope": (
+                "https://www.googleapis.com/auth/cloud-platform "
+                "https://www.googleapis.com/auth/aicode "
+                "https://www.googleapis.com/auth/userinfo.email"
+            ),
             "access_type": "offline",
             "prompt": "consent",
         }
@@ -424,20 +507,23 @@ def launch_cli_login(provider_name: str) -> None:
 
 
 def fetch_all() -> list[ProviderStatus]:
-    """세 서비스의 잔여 사용량을 병렬로 빠르게 조회한다."""
+    """Claude, Codex, Gemini, Argon의 잔여 사용량을 병렬로 빠르게 조회한다."""
     from concurrent.futures import ThreadPoolExecutor
 
-    # ponytail: 3개 고정 프로바이더만 조회하므로 단순 스레드풀(max_workers=3)로 충분함
+    # ponytail: 3개 계정 엔드포인트를 병렬 조회한 뒤 Gemini/Argon 결과를 펼쳐 4개 카드로 반환함
     with ThreadPoolExecutor(max_workers=3) as pool:
-        futures = [pool.submit(fn) for fn in (fetch_claude, fetch_codex, fetch_gemini)]
-        return [f.result() for f in futures]
+        f_claude = pool.submit(fetch_claude)
+        f_codex = pool.submit(fetch_codex)
+        f_gem_argon = pool.submit(fetch_gemini_and_argon)
+        gemini_st, argon_st = f_gem_argon.result()
+        return [f_claude.result(), f_codex.result(), gemini_st, argon_st]
 
 
 if __name__ == "__main__":
-    # Ponytail 단일 검증 루틴: 시간 포맷터 및 실제 프로바이더 조회 동작 검증
+    # Ponytail 단일 검증 루틴: 시간 포맷터 및 4개 카드(Claude, Codex, Gemini, Argon) 조회 검증
     assert _format_reset(dt.datetime.now(dt.timezone.utc).timestamp() + 3700).startswith("1시간")
     statuses = fetch_all()
-    assert len(statuses) == 3
+    assert len(statuses) == 4
     for st in statuses:
         print(f"[{st.name}] connected={st.connected} plan={st.plan} error={st.error}")
         for m in st.metrics:

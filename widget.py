@@ -30,6 +30,7 @@ BRAND_COLORS = {
     "Claude": "#e07a5f",
     "Codex": "#10a37f",
     "Gemini": "#4ea8de",
+    "Argon": "#a855f7",
 }
 
 REFRESH_INTERVAL_MS = 60_000  # 1분 주기 자동 갱신
@@ -194,7 +195,7 @@ class UsageWidgetApp:
 
     def _on_link_click(self, provider_name: str) -> None:
         """연동 버튼 클릭 시 서비스별 인증 절차를 실행하고 완료 후 새로고침한다."""
-        if provider_name == "Gemini":
+        if provider_name in ("Gemini", "Argon"):
             self.status_label.configure(text="브라우저에서 Gemini 로그인을 완료해주세요...")
 
             def _gemini_worker() -> None:
@@ -203,7 +204,7 @@ class UsageWidgetApp:
                     0,
                     lambda: (
                         self.status_label.configure(
-                            text="Gemini 연동 완료!" if ok else "Gemini 연동 취소/실패"
+                            text="Gemini/Argon 연동 완료!" if ok else "연동 취소/실패"
                         ),
                         self.refresh_async(),
                     ),
@@ -375,8 +376,8 @@ def main() -> None:
                 root.after(200, _verify_and_quit)
                 return
             cards = app.cards_frame.winfo_children()
-            assert len(cards) == 3, f"Expected 3 provider cards, got {len(cards)}"
-            print("WIDGET_CHECK_OK: 3 provider cards rendered successfully.")
+            assert len(cards) == 4, f"Expected 4 provider cards, got {len(cards)}"
+            print("WIDGET_CHECK_OK: 4 provider cards rendered successfully.")
             root.destroy()
 
         root.after(300, _verify_and_quit)
