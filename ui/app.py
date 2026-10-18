@@ -48,6 +48,7 @@ class UsageWidgetApp:
         self._drag_x = 0
         self._drag_y = 0
         self._is_loading = False
+        self.tray = None  # widget.py 에서 트레이 시작 후 주입 (없으면 ✕ 가 곧 종료)
 
         # 외곽 테두리 프레임
         self.outer = tk.Frame(
@@ -110,7 +111,7 @@ class UsageWidgetApp:
             cursor="hand2",
         )
         btn_close.pack(side="right")
-        btn_close.bind("<Button-1>", lambda _e: self.root.destroy())
+        btn_close.bind("<Button-1>", lambda _e: self._on_close())
 
         self.btn_pin = tk.Label(
             header,
@@ -150,6 +151,26 @@ class UsageWidgetApp:
         self.topmost = not self.topmost
         self.root.attributes("-topmost", self.topmost)
         self.btn_pin.configure(fg=FG_TEXT if self.topmost else FG_SUB)
+
+    def _on_close(self) -> None:
+        """트레이가 있으면 숨기기만 한다(시작 프로그램 위젯을 실수로 꺼버리지 않도록). 종료는 트레이 메뉴에서."""
+        if self.tray:
+            self.root.withdraw()
+        else:
+            self.quit()
+
+    def toggle_visible(self) -> None:
+        if self.root.state() == "withdrawn":
+            self.root.deiconify()
+            self.root.attributes("-topmost", self.topmost)  # 다시 보일 때 고정 상태 재적용
+        else:
+            self.root.withdraw()
+
+    def quit(self) -> None:
+        # 트레이 아이콘을 먼저 내려야 종료 후 알림 영역에 유령 아이콘이 남지 않는다.
+        if self.tray:
+            self.tray.stop()
+        self.root.destroy()
 
     def _schedule_auto_refresh(self) -> None:
         self.root.after(REFRESH_INTERVAL_MS, self._auto_refresh_tick)

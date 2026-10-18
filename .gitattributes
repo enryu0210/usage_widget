@@ -1,0 +1,2 @@
+# cmd 는 LF 줄바꿈 + UTF-8 한글 조합에서 줄을 잘못 읽으므로 bat 은 항상 CRLF 로 체크아웃한다.
+*.bat text eol=crlf

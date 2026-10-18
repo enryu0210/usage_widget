@@ -2,3 +2,8 @@ __pycache__/
 *.py[cod]
 .env
 CLAUDE.local.md
+# PyInstaller 빌드 산출물
+build/
+dist/
+*.spec
+.venv-build/

@@ -6,26 +6,43 @@ UI 구현체는 ui 패키지에서, 서비스별 API 조회 및 인증 연동은
 
 from __future__ import annotations
 
+import ctypes
 import sys
 import tkinter as tk
 
-from ui import UsageWidgetApp
+from ui import UsageWidgetApp, autostart, start_tray
+
+ERROR_ALREADY_EXISTS = 183
+
+
+def already_running() -> bool:
+    """시작 프로그램 + 수동 실행으로 위젯·트레이 아이콘이 두 개 뜨는 것을 막는다(명명된 뮤텍스)."""
+    # 반환된 핸들은 프로세스 종료 시 OS 가 회수하므로 일부러 닫지 않는다(닫으면 잠금이 풀린다).
+    ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\AIUsageWidget")
+    return ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS
 
 
 def main() -> None:
+    is_check = "--check" in sys.argv
+    if not is_check and already_running():
+        return
+
+    autostart.register_on_launch()
+
     root = tk.Tk()
     app = UsageWidgetApp(root)
+    app.tray = start_tray(app)
 
     # 자동 검증 모드 (--check): 실제 렌더링까지 마친 뒤 4개 카드 생성 여부를 검증하고 종료한다.
-    if "--check" in sys.argv:
+    if is_check:
         def _verify_and_quit() -> None:
             if app._is_loading:
                 root.after(200, _verify_and_quit)
                 return
             cards = app.cards_frame.winfo_children()
             assert len(cards) == 4, f"Expected 4 provider cards, got {len(cards)}"
-            print("WIDGET_CHECK_OK: 4 provider cards rendered successfully.")
-            root.destroy()
+            print(f"WIDGET_CHECK_OK: 4 provider cards rendered successfully. tray={'on' if app.tray else 'off'}")
+            app.quit()
 
         root.after(300, _verify_and_quit)
 

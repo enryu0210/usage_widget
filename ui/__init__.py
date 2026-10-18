@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from . import autostart
 from .app import UsageWidgetApp
+from .tray import start_tray
 
-__all__ = ["UsageWidgetApp"]
+__all__ = ["UsageWidgetApp", "autostart", "start_tray"]
