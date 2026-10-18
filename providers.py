@@ -46,7 +46,7 @@ def _get_gemini_oauth_client() -> tuple[str, str]:
     exe_path = pathlib.Path(local_app) / "agy" / "bin" / "agy.exe"
     if exe_path.exists():
         raw = exe_path.read_bytes()
-        ids = re.findall(b"[0-9]{12}-[a-z0-9]{32}\\.apps\\.googleusercontent\\.com", raw)
+        ids = re.findall(b"107[0-9]{10}-[a-z0-9]{32}\\.apps\\.googleusercontent\\.com", raw)
         secrets = re.findall(b"GOCSPX-[A-Za-z0-9_\\-]{28}", raw)
         if ids and secrets:
             cid = ids[0].decode("ascii")
