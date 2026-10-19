@@ -18,38 +18,74 @@ import urllib.parse
 from .base import WIDGET_CONFIG_DIR, ProviderStatus, QuotaMetric, format_reset, http_json
 
 
+def _is_valid_client_pair(client_id: str, client_secret: str) -> bool:
+    """client_id 와 client_secret 이 짝이 맞는지 Google 토큰 엔드포인트로 확인한다.
+
+    일부러 가짜 refresh_token 을 보낸다. 짝이 맞으면 Google 은 'invalid_grant'(토큰이 틀림)를,
+    짝이 틀리면 'invalid_client'(앱 인증 실패)를 돌려주므로 사용자 토큰 없이도 짝을 판별할 수 있다.
+    """
+    form = urllib.parse.urlencode(
+        {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "refresh_token": "usage-widget-pair-check",
+            "grant_type": "refresh_token",
+        }
+    ).encode("utf-8")
+    try:
+        http_json("https://oauth2.googleapis.com/token", method="POST", data=form)
+        return True  # 가짜 토큰이 통과할 일은 없지만, 통과했다면 짝은 맞는 것이다.
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read().decode("utf-8")).get("error")
+        except Exception:
+            err = ""
+        return err == "invalid_grant"
+
+
 def get_gemini_oauth_client() -> tuple[str, str]:
     """로컬에 설치된 Antigravity 바이너리 또는 캐시 파일에서 OAuth 클라이언트 정보를 동적으로 읽는다.
 
     코드 저장소에 OAuth 클라이언트 식별자를 하드코딩하면 GitHub Push Protection에 차단되므로,
     현재 기기의 설치본에서 최초 1회 추출하여 ~/.usage_widget/gemini_client.json 에 캐싱한다.
+
+    agy.exe 안에는 client_secret 후보가 여러 개 들어 있고 순서는 빌드마다 달라서,
+    '첫 번째 secret' 을 고르면 다른 PC(다른 agy 버전)에서 짝이 어긋나 연동이 통째로 실패한다.
+    그래서 후보를 하나씩 실제로 검증해 맞는 짝만 캐싱한다('verified' 표시가 없는 옛 캐시는 재검증).
     """
     cache_file = WIDGET_CONFIG_DIR / "gemini_client.json"
     if cache_file.exists():
         try:
             data = json.loads(cache_file.read_text(encoding="utf-8"))
-            if data.get("client_id") and data.get("client_secret"):
+            if data.get("verified") and data.get("client_id") and data.get("client_secret"):
                 return str(data["client_id"]), str(data["client_secret"])
         except Exception:
             pass
 
     local_app = os.environ.get("LOCALAPPDATA", "")
     exe_path = pathlib.Path(local_app) / "agy" / "bin" / "agy.exe"
-    if exe_path.exists():
-        raw = exe_path.read_bytes()
-        ids = re.findall(b"107[0-9]{10}-[a-z0-9]{32}\\.apps\\.googleusercontent\\.com", raw)
-        secrets = re.findall(b"GOCSPX-[A-Za-z0-9_\\-]{28}", raw)
-        if ids and secrets:
-            cid = ids[0].decode("ascii")
-            csec = secrets[0].decode("ascii")
+    if not exe_path.exists():
+        raise RuntimeError("Antigravity(agy) 설치본을 찾을 수 없습니다. agy 를 먼저 설치해주세요.")
+
+    raw = exe_path.read_bytes()
+    ids = re.findall(b"107[0-9]{10}-[a-z0-9]{32}\\.apps\\.googleusercontent\\.com", raw)
+    # 같은 secret 이 여러 번 박혀 있을 수 있어 등장 순서를 유지한 채 중복만 제거한다.
+    secrets = list(dict.fromkeys(re.findall(b"GOCSPX-[A-Za-z0-9_\\-]{28}", raw)))
+    if not ids or not secrets:
+        raise RuntimeError("agy 설치본에서 OAuth 클라이언트 정보를 찾을 수 없습니다.")
+
+    cid = ids[0].decode("ascii")
+    for sec in secrets:
+        csec = sec.decode("ascii")
+        if _is_valid_client_pair(cid, csec):
             WIDGET_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
             cache_file.write_text(
-                json.dumps({"client_id": cid, "client_secret": csec}, indent=2),
+                json.dumps({"client_id": cid, "client_secret": csec, "verified": True}, indent=2),
                 encoding="utf-8",
             )
             return cid, csec
 
-    raise RuntimeError("로컬 Antigravity 설치본에서 OAuth 클라이언트 정보를 찾을 수 없습니다.")
+    raise RuntimeError("agy 설치본의 OAuth 클라이언트 짝을 검증하지 못했습니다 (네트워크 확인).")
 
 
 def _extract_credman_refresh_token() -> str | None:

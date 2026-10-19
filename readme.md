@@ -27,6 +27,7 @@ usage_widget/
 │   ├── icon.ico              # 앱/트레이 로고
 │   └── make_icon.py          # 로고 생성 스크립트 (Pillow)
 ├── widget.py                 # 위젯 실행 진입점 (main, 중복 실행 방지, --check 자가 검증)
+├── test_providers.py         # 토큰 갱신·연동 로직 오프라인 검증 (실제 계정 미사용)
 ├── build.bat                 # exe 패키징 스크립트 → dist\AIUsageWidget.exe
 └── run_widget.bat            # Windows 더블클릭 실행 런처 (소스 실행)
 ```
@@ -37,9 +38,9 @@ usage_widget/
 - **시작 프로그램 자동 등록**: exe 를 어느 PC에서든 처음 실행하면 현재 사용자의 시작 프로그램(HKCU Run)에 자동 등록됩니다. 트레이 메뉴에서 끄면 그 선택이 `~/.usage_widget/autostart_disabled` 로 기억되어 다시 켜지지 않습니다. exe 를 옮긴 뒤 한 번 실행하면 등록 경로도 갱신됩니다.
 - **중복 실행 방지**: 이미 실행 중이면 두 번째 실행은 조용히 종료됩니다.
 - **자동 계정 연동 및 원클릭 재연동**:
-  - **Claude**: 로컬 `~/.claude/.credentials.json` OAuth 토큰 자동 감지 및 `claude login` 연동
+  - **Claude**: 로컬 `~/.claude/.credentials.json` OAuth 토큰 자동 감지 및 `claude login` 연동. 재부팅 등으로 토큰이 만료돼 있으면 위젯이 직접 갱신해 같은 파일에 되써 넣습니다(Claude Code 와 토큰 공유).
   - **Codex**: 로컬 `~/.codex/auth.json` OAuth 토큰 자동 감지 및 `codex login` 연동
-  - **Gemini & Argon**: 위젯 전용 OAuth(`~/.usage_widget/gemini_oauth.json`) → Windows 자격 증명 관리자(`gemini:antigravity`) → Antigravity IDE(`%APPDATA%/Antigravity/.../state.vscdb`) 순서로 자동 감지하며, 일반 Gemini 모델(5시간/주간)과 **Argon(`Gemini 4 Argon`)** 주간 쿼터를 별도 카드로 분리해 표시합니다.
+  - **Gemini & Argon**: 위젯 전용 OAuth(`~/.usage_widget/gemini_oauth.json`) → Windows 자격 증명 관리자(`gemini:antigravity`) → Antigravity IDE(`%APPDATA%/Antigravity/.../state.vscdb`) 순서로 자동 감지하며, OAuth 클라이언트 정보는 PC 의 agy 설치본에서 읽어 짝을 검증한 뒤 `~/.usage_widget/gemini_client.json` 에 캐싱합니다. 일반 Gemini 모델(5시간/주간)과 **Argon(`Gemini 4 Argon`)** 주간 쿼터를 별도 카드로 분리해 표시합니다.
 - **위젯 편의 기능**: 드래그 이동, 항상 위 고정(`📌`), 수동 새로고침(`↻`), 1분 주기 자동 갱신
 
 ## 배포용 exe 만들기
@@ -61,6 +62,7 @@ usage_widget/
    ```
 2. **동작 자가 검증**:
    ```powershell
+   python test_providers.py   # 오프라인 로직 검증
    python -m providers
    python widget.py --check
    ```

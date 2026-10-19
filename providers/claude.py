@@ -7,15 +7,69 @@ Anthropic OAuth 사용량 엔드포인트에서 5시간 세션 및 7일 주간 �
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import time
 import urllib.error
 
 from .base import ProviderStatus, QuotaMetric, format_reset, http_json
 
+# Claude Code CLI 의 공개 OAuth 클라이언트 ID (비밀값이 아니라 앱 식별자).
+CLAUDE_CODE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+# Claude Code 버전에 따라 토큰 발급처가 다르므로 신규 → 구 주소 순서로 시도한다.
+TOKEN_URLS = (
+    "https://platform.claude.com/v1/oauth/token",
+    "https://console.anthropic.com/v1/oauth/token",
+)
+# Cloudflare 가 기본 Python-urllib UA 를 차단(403 error 1010)하므로 CLI UA 를 쓴다.
+USER_AGENT = "claude-code/2.0.0"
 
-def fetch_claude() -> ProviderStatus:
+
+def _refresh_access_token(cred_path: pathlib.Path, raw: dict, oauth: dict) -> str:
+    """만료된 access token 을 refresh token 으로 갱신하고 credentials 파일에 되써 넣는다.
+
+    PC 를 재부팅하면 Claude Code 가 실행되기 전까지 아무도 토큰을 갱신하지 않아 위젯이 401 을 받는다.
+    refresh token 은 갱신할 때마다 새 값으로 교체(rotation)되므로, 새 값을 파일에 저장하지 않으면
+    Claude Code 쪽이 옛 refresh token 을 들고 있다가 로그아웃된다. 그래서 반드시 되써 넣는다.
+    """
+    body = json.dumps(
+        {
+            "grant_type": "refresh_token",
+            "refresh_token": oauth["refreshToken"],
+            "client_id": CLAUDE_CODE_CLIENT_ID,
+        }
+    ).encode("utf-8")
+    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
+
+    last_error: Exception | None = None
+    for url in TOKEN_URLS:
+        try:
+            tok = http_json(url, method="POST", headers=headers, data=body)
+            break
+        except urllib.error.HTTPError as e:
+            # 404/403 은 주소 문제일 수 있어 다음 주소로 넘어가고, 400/401 은 토큰 자체가 무효라 바로 중단한다.
+            if e.code in (400, 401):
+                raise
+            last_error = e
+    else:
+        raise last_error or RuntimeError("토큰 갱신 실패")
+
+    oauth["accessToken"] = tok["access_token"]
+    if tok.get("refresh_token"):
+        oauth["refreshToken"] = tok["refresh_token"]
+    if tok.get("expires_in"):
+        oauth["expiresAt"] = int(time.time() * 1000) + int(tok["expires_in"]) * 1000
+
+    # 쓰는 도중 죽어도 Claude Code 인증 파일이 반쯤 깨진 상태로 남지 않도록 임시 파일 → 교체로 원자적 저장.
+    tmp_path = cred_path.with_suffix(".widget-tmp")
+    tmp_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    os.replace(tmp_path, cred_path)
+    return oauth["accessToken"]
+
+
+def fetch_claude(cred_path: pathlib.Path | None = None) -> ProviderStatus:
     """Claude Code 로컬 OAuth 토큰으로 5시간/7일 잔여 사용량을 조회한다."""
-    cred_path = pathlib.Path.home() / ".claude" / ".credentials.json"
+    cred_path = cred_path or pathlib.Path.home() / ".claude" / ".credentials.json"
     if not cred_path.exists():
         return ProviderStatus("Claude", False, error="계정 미연동 (.claude 인증 없음)")
 
@@ -26,6 +80,11 @@ def fetch_claude() -> ProviderStatus:
         if not token:
             return ProviderStatus("Claude", False, error="토큰 없음 (로그인 필요)")
 
+        # 만료 1분 전부터 미리 갱신한다. Claude Code 가 켜져 있으면 스스로 먼저 갱신하므로 여기까지 오지 않는다.
+        expires_at_ms = oauth.get("expiresAt") or 0
+        if oauth.get("refreshToken") and expires_at_ms and expires_at_ms <= (time.time() + 60) * 1000:
+            token = _refresh_access_token(cred_path, raw, oauth)
+
         plan = str(oauth.get("subscriptionType") or "Claude").upper()
         usage = http_json(
             "https://api.anthropic.com/api/oauth/usage",
@@ -33,7 +92,7 @@ def fetch_claude() -> ProviderStatus:
                 "Authorization": f"Bearer {token}",
                 # OAuth 토큰으로 사용량 API에 접근하기 위해 필수 요구되는 베타 헤더
                 "anthropic-beta": "oauth-2025-04-20",
-                "User-Agent": "claude-code/2.0.0",
+                "User-Agent": USER_AGENT,
             },
         )
 

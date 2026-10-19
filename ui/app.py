@@ -201,15 +201,17 @@ class UsageWidgetApp:
             self.status_label.configure(text="브라우저에서 Gemini 로그인을 완료해주세요...")
 
             def _gemini_worker() -> None:
-                ok = link_gemini_oauth()
+                # 백그라운드 스레드의 예외는 아무 데도 표시되지 않아 '로그인 안내'에서 멈춘 것처럼 보이므로
+                # 반드시 잡아서 원인을 상태 표시줄에 띄운다.
+                try:
+                    ok = link_gemini_oauth()
+                    message = "Gemini/Argon 연동 완료!" if ok else "연동 취소/시간 초과"
+                except Exception as e:
+                    ok, message = False, f"연동 실패: {e}"
+                # 실패 시 새로고침하면 '최근 업데이트' 문구가 원인 메시지를 곧바로 덮어버리므로 성공 시에만 갱신한다.
                 self.root.after(
                     0,
-                    lambda: (
-                        self.status_label.configure(
-                            text="Gemini/Argon 연동 완료!" if ok else "연동 취소/실패"
-                        ),
-                        self.refresh_async(),
-                    ),
+                    lambda: (self.status_label.configure(text=message), ok and self.refresh_async()),
                 )
 
             threading.Thread(target=_gemini_worker, daemon=True).start()
