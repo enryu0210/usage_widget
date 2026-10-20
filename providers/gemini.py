@@ -11,6 +11,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import sqlite3
 import urllib.error
 import urllib.parse
@@ -43,6 +44,24 @@ def _is_valid_client_pair(client_id: str, client_secret: str) -> bool:
         return err == "invalid_grant"
 
 
+def _find_agy_exe() -> pathlib.Path:
+    """agy.exe 위치를 찾는다. 기본 설치 경로를 먼저 보고, 없으면 PATH 에서 찾는다.
+
+    설치 방식에 따라 agy 가 %LOCALAPPDATA%\\agy\\bin 이 아닌 곳에 깔리는 PC 가 있다.
+    터미널에서 agy 가 실행된다면 PATH 에는 잡혀 있으므로 그쪽을 두 번째 후보로 쓴다.
+    """
+    default = pathlib.Path(os.environ.get("LOCALAPPDATA", "")) / "agy" / "bin" / "agy.exe"
+    if default.is_file():
+        return default
+    on_path = shutil.which("agy")
+    # .cmd/.bat 래퍼는 OAuth 정보가 든 실제 바이너리가 아니므로 .exe 일 때만 받는다.
+    if on_path and on_path.lower().endswith(".exe"):
+        return pathlib.Path(on_path)
+    raise RuntimeError(
+        f"Antigravity(agy) 설치본을 찾을 수 없습니다 (확인한 곳: {default}, PATH: {on_path or '없음'})."
+    )
+
+
 def get_gemini_oauth_client() -> tuple[str, str]:
     """로컬에 설치된 Antigravity 바이너리 또는 캐시 파일에서 OAuth 클라이언트 정보를 동적으로 읽는다.
 
@@ -62,12 +81,7 @@ def get_gemini_oauth_client() -> tuple[str, str]:
         except Exception:
             pass
 
-    local_app = os.environ.get("LOCALAPPDATA", "")
-    exe_path = pathlib.Path(local_app) / "agy" / "bin" / "agy.exe"
-    if not exe_path.exists():
-        raise RuntimeError("Antigravity(agy) 설치본을 찾을 수 없습니다. agy 를 먼저 설치해주세요.")
-
-    raw = exe_path.read_bytes()
+    raw = _find_agy_exe().read_bytes()
     ids = re.findall(b"107[0-9]{10}-[a-z0-9]{32}\\.apps\\.googleusercontent\\.com", raw)
     # 같은 secret 이 여러 번 박혀 있을 수 있어 등장 순서를 유지한 채 중복만 제거한다.
     secrets = list(dict.fromkeys(re.findall(b"GOCSPX-[A-Za-z0-9_\\-]{28}", raw)))

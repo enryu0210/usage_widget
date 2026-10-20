@@ -74,6 +74,22 @@ def check_gemini_picks_matching_secret(tmp: pathlib.Path) -> None:
     assert cached["client_secret"] == right and cached["verified"]
 
 
+def check_agy_found_on_path(tmp: pathlib.Path) -> None:
+    """기본 경로에 agy 가 없어도 PATH 에 있는 agy.exe 를 찾아야 하고, .cmd 래퍼는 거절해야 한다."""
+    exe = tmp / "elsewhere" / "agy.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"")
+    with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(tmp)}):
+        with mock.patch.object(gemini.shutil, "which", lambda name: str(exe)):
+            assert gemini._find_agy_exe() == exe
+        with mock.patch.object(gemini.shutil, "which", lambda name: str(tmp / "agy.cmd")):
+            try:
+                gemini._find_agy_exe()
+                raise AssertionError(".cmd 래퍼를 agy 바이너리로 받아들였다")
+            except RuntimeError as e:
+                assert "agy.cmd" in str(e)  # 오류 문구에 찾은 경로가 남아야 다음 진단이 쉽다
+
+
 def check_login_ignores_stray_requests(tmp: pathlib.Path) -> None:
     """콜백 전에 favicon 같은 요청이 먼저 와도 서버가 닫히지 않고 진짜 code 를 받아야 한다."""
 
@@ -101,7 +117,7 @@ def check_login_ignores_stray_requests(tmp: pathlib.Path) -> None:
 
 if __name__ == "__main__":
     for check in (check_claude_refreshes_expired_token, check_gemini_picks_matching_secret,
-                  check_login_ignores_stray_requests):
+                  check_agy_found_on_path, check_login_ignores_stray_requests):
         with tempfile.TemporaryDirectory() as d:
             check(pathlib.Path(d))
         print("OK", check.__name__)
