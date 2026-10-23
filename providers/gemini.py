@@ -13,6 +13,7 @@ import pathlib
 import re
 import shutil
 import sqlite3
+import sys
 import urllib.error
 import urllib.parse
 
@@ -62,25 +63,33 @@ def _find_agy_exe() -> pathlib.Path:
     )
 
 
-def get_gemini_oauth_client() -> tuple[str, str]:
-    """로컬에 설치된 Antigravity 바이너리 또는 캐시 파일에서 OAuth 클라이언트 정보를 동적으로 읽는다.
+def _read_verified_client(path: pathlib.Path) -> tuple[str, str] | None:
+    """검증 표시('verified')가 있는 클라이언트 파일만 읽는다. 없거나 깨졌으면 None."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if data.get("verified") and data.get("client_id") and data.get("client_secret"):
+        return str(data["client_id"]), str(data["client_secret"])
+    return None
 
-    코드 저장소에 OAuth 클라이언트 식별자를 하드코딩하면 GitHub Push Protection에 차단되므로,
-    현재 기기의 설치본에서 최초 1회 추출하여 ~/.usage_widget/gemini_client.json 에 캐싱한다.
+
+def _bundled_client_path() -> pathlib.Path | None:
+    """배포용 exe 에 build.bat 이 동봉한 클라이언트 파일 경로. 소스 실행이면 None.
+
+    Antigravity 를 안 쓰는 사람은 PC 에 agy.exe 가 없어 클라이언트를 뽑을 곳이 없다.
+    그래서 빌드한 PC 에서 검증된 짝을 exe 안에만 넣어 배포한다(저장소에는 올리지 않는다).
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    return pathlib.Path(base) / "bundled" / "gemini_client.json" if base else None
+
+
+def _extract_client_from_agy(cache_file: pathlib.Path) -> tuple[str, str]:
+    """agy.exe 바이너리에서 client_id/secret 후보를 뽑아 실제로 짝이 맞는 것만 캐싱한다.
 
     agy.exe 안에는 client_secret 후보가 여러 개 들어 있고 순서는 빌드마다 달라서,
     '첫 번째 secret' 을 고르면 다른 PC(다른 agy 버전)에서 짝이 어긋나 연동이 통째로 실패한다.
-    그래서 후보를 하나씩 실제로 검증해 맞는 짝만 캐싱한다('verified' 표시가 없는 옛 캐시는 재검증).
     """
-    cache_file = WIDGET_CONFIG_DIR / "gemini_client.json"
-    if cache_file.exists():
-        try:
-            data = json.loads(cache_file.read_text(encoding="utf-8"))
-            if data.get("verified") and data.get("client_id") and data.get("client_secret"):
-                return str(data["client_id"]), str(data["client_secret"])
-        except Exception:
-            pass
-
     raw = _find_agy_exe().read_bytes()
     ids = re.findall(b"107[0-9]{10}-[a-z0-9]{32}\\.apps\\.googleusercontent\\.com", raw)
     # 같은 secret 이 여러 번 박혀 있을 수 있어 등장 순서를 유지한 채 중복만 제거한다.
@@ -100,6 +109,27 @@ def get_gemini_oauth_client() -> tuple[str, str]:
             return cid, csec
 
     raise RuntimeError("agy 설치본의 OAuth 클라이언트 짝을 검증하지 못했습니다 (네트워크 확인).")
+
+
+def get_gemini_oauth_client() -> tuple[str, str]:
+    """Google OAuth 클라이언트 정보를 캐시 → agy 설치본 → exe 동봉본 순서로 구한다.
+
+    코드 저장소에 OAuth 클라이언트 식별자를 하드코딩하면 GitHub Push Protection에 차단되므로,
+    현재 기기의 설치본에서 최초 1회 추출하여 ~/.usage_widget/gemini_client.json 에 캐싱한다.
+    ('verified' 표시가 없는 옛 캐시는 짝이 틀렸을 수 있어 무시하고 다시 고른다.)
+    """
+    cache_file = WIDGET_CONFIG_DIR / "gemini_client.json"
+    cached = _read_verified_client(cache_file)
+    if cached:
+        return cached
+    try:
+        return _extract_client_from_agy(cache_file)
+    except RuntimeError:
+        bundled_path = _bundled_client_path()
+        bundled = _read_verified_client(bundled_path) if bundled_path else None
+        if bundled:
+            return bundled
+        raise
 
 
 def _extract_credman_refresh_token() -> str | None:
@@ -274,12 +304,22 @@ def fetch_gemini_and_argon() -> tuple[ProviderStatus, ProviderStatus]:
                 rem = max(0.0, min(100.0, float(b["remainingFraction"]) * 100.0))
                 win = str(b.get("window") or "")
                 label = window_labels.get(win, str(b.get("displayName") or "쿼터 잔여"))
-                metric = QuotaMetric(label, rem, format_reset(b.get("resetTime")))
+                bucket_id = str(b.get("bucketId") or f"{gname}.{win}")
+                reset = format_reset(b.get("resetTime"))
 
-                if "Argon" in gname or "argon" in str(b.get("bucketId") or ""):
-                    argon_metrics.append(metric)
-                elif "Gemini" in gname or str(b.get("bucketId") or "").startswith("gemini-"):
-                    gemini_metrics.append(metric)
+                if "Argon" in gname or "argon" in bucket_id:
+                    argon_metrics.append(QuotaMetric(label, rem, reset, key=f"argon.{bucket_id}"))
+                elif "Gemini" in gname or bucket_id.startswith("gemini-"):
+                    gemini_metrics.append(QuotaMetric(label, rem, reset, key=f"gemini.{bucket_id}"))
+                else:
+                    # 그 밖의 모델 그룹(같은 계정에 붙는 다른 모델 쿼터)도 버리지 않고 세부 행으로 둔다.
+                    # 무엇이 올지 서버마다 달라 기본은 숨기고, 필요한 사람만 ⚙ 에서 켠다.
+                    gemini_metrics.append(
+                        QuotaMetric(
+                            f"{gname or '기타'} · {label}", rem, reset,
+                            key=f"gemini.{bucket_id}", detail=True,
+                        )
+                    )
 
         gemini_status = ProviderStatus("Gemini", True, plan=plan, metrics=gemini_metrics)
         if argon_metrics:

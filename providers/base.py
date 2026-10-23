@@ -24,6 +24,10 @@ class QuotaMetric:
     label: str
     remaining_percent: float  # 0.0 ~ 100.0 (잔여 비율)
     reset_text: str = ""
+    # 표시 설정(⚙)에 저장되는 고유 키. 라벨은 바뀔 수 있어 키로 켜고 끈 상태를 기억한다.
+    key: str = ""
+    # 모델별 세부 한도처럼 '있으면 좋은' 행. 기본 화면이 복잡해지지 않게 처음엔 숨긴다.
+    detail: bool = False
 
 
 @dataclass

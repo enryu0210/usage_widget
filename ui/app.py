@@ -13,6 +13,7 @@ from providers import (
     link_gemini_oauth,
 )
 
+from .settings import DisplaySettings
 from .theme import (
     BG_BAR,
     BG_CARD,
@@ -49,6 +50,10 @@ class UsageWidgetApp:
         self._drag_y = 0
         self._is_loading = False
         self.tray = None  # widget.py 에서 트레이 시작 후 주입 (없으면 ✕ 가 곧 종료)
+        self.display = DisplaySettings()
+        # 표시 설정을 바꿀 때 네트워크 재조회 없이 바로 다시 그리려고 마지막 조회 결과를 들고 있는다.
+        self._last_statuses: list[ProviderStatus] = []
+        self._menu_vars: list[tk.BooleanVar] = []
 
         # 외곽 테두리 프레임
         self.outer = tk.Frame(
@@ -112,6 +117,18 @@ class UsageWidgetApp:
         )
         btn_close.pack(side="right")
         btn_close.bind("<Button-1>", lambda _e: self._on_close())
+
+        btn_settings = tk.Label(
+            header,
+            text="⚙",
+            bg=BG_MAIN,
+            fg=FG_TEXT,
+            font=("Segoe UI Symbol", 10),
+            padx=4,
+            cursor="hand2",
+        )
+        btn_settings.pack(side="right")
+        btn_settings.bind("<Button-1>", self._open_display_menu)
 
         self.btn_pin = tk.Label(
             header,
@@ -221,17 +238,69 @@ class UsageWidgetApp:
                 text=f"{provider_name} 터미널 로그인 완료 후 ↻ 버튼을 눌러주세요."
             )
 
+    def _open_display_menu(self, event: tk.Event) -> None:
+        """⚙ 클릭 시 서비스별 '카드 표시'와 행(세부 모델 한도 포함) 체크 메뉴를 띄운다.
+
+        행 목록은 서버 응답에 따라 달라지므로 매번 마지막 조회 결과로 새로 만든다.
+        """
+        menu = tk.Menu(self.root, tearoff=0)
+        # BooleanVar 가 가비지 컬렉션되면 체크 표시가 사라지므로 다음 메뉴를 열 때까지 붙잡아 둔다.
+        self._menu_vars = []
+        if not self._last_statuses:
+            menu.add_command(label="불러오는 중...", state="disabled")
+        for st in self._last_statuses:
+            sub = tk.Menu(menu, tearoff=0)
+            card_var = tk.BooleanVar(value=self.display.card_visible(st.name))
+            self._menu_vars.append(card_var)
+            sub.add_checkbutton(
+                label="카드 표시",
+                variable=card_var,
+                command=lambda n=st.name, v=card_var: self._apply_display(
+                    lambda: self.display.set_card(n, v.get())
+                ),
+            )
+            if st.metrics:
+                sub.add_separator()
+            for m in st.metrics:
+                m_var = tk.BooleanVar(value=self.display.metric_visible(m))
+                self._menu_vars.append(m_var)
+                sub.add_checkbutton(
+                    label=m.label,
+                    variable=m_var,
+                    command=lambda m=m, v=m_var: self._apply_display(
+                        lambda: self.display.set_metric(m, v.get())
+                    ),
+                )
+            menu.add_cascade(label=st.name, menu=sub)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _apply_display(self, change) -> None:
+        """설정을 바꾸고(파일에 저장됨) 마지막 조회 결과로 즉시 다시 그린다."""
+        change()
+        self._render_cards()
+
     def _render_statuses(self, statuses: list[ProviderStatus]) -> None:
-        """조회된 4개 카드(Claude, Codex, Gemini, Argon) 상태를 UI로 다시 그린다."""
+        """조회 결과를 저장하고 카드를 다시 그린 뒤 갱신 시각을 표시한다."""
         self._is_loading = False
+        self._last_statuses = statuses
+        self._render_cards()
+        now_str = dt.datetime.now().strftime("%H:%M:%S")
+        if any(self.display.card_visible(st.name) for st in statuses):
+            self.status_label.configure(text=f"최근 업데이트: {now_str} (1분마다 자동 갱신)")
+        else:
+            self.status_label.configure(text="모든 카드가 숨겨져 있습니다. ⚙ 에서 켜주세요.")
+
+    def _render_cards(self) -> None:
+        """표시 설정에서 켜진 카드만 그린다(숨긴 카드도 조회는 계속해 메뉴에 행 목록을 보여준다)."""
         for child in self.cards_frame.winfo_children():
             child.destroy()
 
-        for st in statuses:
-            self._build_card(st)
-
-        now_str = dt.datetime.now().strftime("%H:%M:%S")
-        self.status_label.configure(text=f"최근 업데이트: {now_str} (1분마다 자동 갱신)")
+        for st in self._last_statuses:
+            if self.display.card_visible(st.name):
+                self._build_card(st)
 
         # 내용 높이에 맞춰 창 크기를 자연스럽게 조정한다.
         self.root.update_idletasks()
@@ -313,8 +382,10 @@ class UsageWidgetApp:
             err_lbl.pack(fill="x", pady=(4, 0))
             return
 
-        # 쿼터 프로그레스 바 렌더링
+        # 쿼터 프로그레스 바 렌더링 (⚙ 에서 끈 행은 건너뛴다)
         for m in st.metrics:
+            if not self.display.metric_visible(m):
+                continue
             row = tk.Frame(card, bg=BG_CARD)
             row.pack(fill="x", pady=(6, 0))
 

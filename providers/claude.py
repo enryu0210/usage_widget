@@ -23,6 +23,14 @@ TOKEN_URLS = (
 )
 # Cloudflare 가 기본 Python-urllib UA 를 차단(403 error 1010)하므로 CLI UA 를 쓴다.
 USER_AGENT = "claude-code/2.0.0"
+# (응답 키, 라벨, 세부 행 여부). 모델별 주간 한도는 요금제에 따라 null 로 오거나 아예 없어서
+# 기본은 숨기고, 필요한 사람만 표시 설정(⚙)에서 켠다.
+USAGE_WINDOWS = (
+    ("five_hour", "5시간 세션 잔여", False),
+    ("seven_day", "7일 주간 잔여", False),
+    ("seven_day_sonnet", "7일 Sonnet 잔여", True),
+    ("seven_day_opus", "7일 Opus 잔여", True),
+)
 
 
 def _refresh_access_token(cred_path: pathlib.Path, raw: dict, oauth: dict) -> str:
@@ -97,12 +105,17 @@ def fetch_claude(cred_path: pathlib.Path | None = None) -> ProviderStatus:
         )
 
         metrics: list[QuotaMetric] = []
-        for key, label in [("five_hour", "5시간 세션 잔여"), ("seven_day", "7일 주간 잔여")]:
+        for key, label, detail in USAGE_WINDOWS:
             win = usage.get(key)
             if isinstance(win, dict) and win.get("utilization") is not None:
                 used = float(win["utilization"])
                 rem = max(0.0, min(100.0, 100.0 - used))
-                metrics.append(QuotaMetric(label, rem, format_reset(win.get("resets_at"))))
+                metrics.append(
+                    QuotaMetric(
+                        label, rem, format_reset(win.get("resets_at")),
+                        key=f"claude.{key}", detail=detail,
+                    )
+                )
 
         return ProviderStatus("Claude", True, plan=plan, metrics=metrics)
     except urllib.error.HTTPError as e:

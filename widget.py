@@ -33,15 +33,16 @@ def main() -> None:
     app = UsageWidgetApp(root)
     app.tray = start_tray(app)
 
-    # 자동 검증 모드 (--check): 실제 렌더링까지 마친 뒤 4개 카드 생성 여부를 검증하고 종료한다.
+    # 자동 검증 모드 (--check): 실제 렌더링까지 마친 뒤 '표시 설정에서 켠 카드' 수만큼 그려졌는지 검증하고 종료한다.
     if is_check:
         def _verify_and_quit() -> None:
             if app._is_loading:
                 root.after(200, _verify_and_quit)
                 return
             cards = app.cards_frame.winfo_children()
-            assert len(cards) == 4, f"Expected 4 provider cards, got {len(cards)}"
-            print(f"WIDGET_CHECK_OK: 4 provider cards rendered successfully. tray={'on' if app.tray else 'off'}")
+            expected = sum(app.display.card_visible(st.name) for st in app._last_statuses)
+            assert len(cards) == expected, f"Expected {expected} provider cards, got {len(cards)}"
+            print(f"WIDGET_CHECK_OK: {expected} provider cards rendered successfully. tray={'on' if app.tray else 'off'}")
             app.quit()
 
         root.after(300, _verify_and_quit)

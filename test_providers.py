@@ -15,7 +15,8 @@ import urllib.parse
 import urllib.request
 from unittest import mock
 
-from providers import auth, claude, gemini
+from providers import QuotaMetric, auth, claude, codex, gemini
+from ui.settings import DisplaySettings
 
 
 def check_claude_refreshes_expired_token(tmp: pathlib.Path) -> None:
@@ -115,9 +116,103 @@ def check_login_ignores_stray_requests(tmp: pathlib.Path) -> None:
     assert json.loads((tmp / "gemini_oauth.json").read_text())["refresh_token"] == "rt-1"
 
 
+def check_gemini_falls_back_to_bundled_client(tmp: pathlib.Path) -> None:
+    """Antigravity 가 없는 PC 에서도 exe 에 동봉된 검증된 클라이언트로 연동할 수 있어야 한다."""
+    conf = tmp / "conf"  # 캐시 없음
+    meipass = tmp / "meipass"
+    (meipass / "bundled").mkdir(parents=True)
+    bundled = meipass / "bundled" / "gemini_client.json"
+    bundled.write_text(json.dumps({"client_id": "cid", "client_secret": "sec", "verified": True}))
+
+    with mock.patch.dict(os.environ, {"LOCALAPPDATA": str(tmp)}),          mock.patch.object(gemini.shutil, "which", lambda name: None),          mock.patch.object(gemini, "WIDGET_CONFIG_DIR", conf):
+        with mock.patch.object(gemini.sys, "_MEIPASS", str(meipass), create=True):
+            assert gemini.get_gemini_oauth_client() == ("cid", "sec")
+        # 검증 표시가 없는 동봉본은 짝이 틀렸을 수 있으니 쓰지 않고 원래 오류를 보여줘야 한다.
+        bundled.write_text(json.dumps({"client_id": "cid", "client_secret": "sec"}))
+        with mock.patch.object(gemini.sys, "_MEIPASS", str(meipass), create=True):
+            try:
+                gemini.get_gemini_oauth_client()
+                raise AssertionError("검증 안 된 동봉본을 사용했다")
+            except RuntimeError as e:
+                assert "agy" in str(e)
+
+
+def check_gemini_keeps_other_groups_as_detail(tmp: pathlib.Path) -> None:
+    """Gemini/Argon 이 아닌 모델 그룹도 버리지 말고 Gemini 카드의 세부(기본 숨김) 행으로 둬야 한다."""
+    summary = {"groups": [
+        {"displayName": "Gemini Models", "buckets": [
+            {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.5},
+            {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.9},
+        ]},
+        {"displayName": "Gemini 4 Argon", "buckets": [
+            {"bucketId": "argon-weekly", "window": "weekly", "remainingFraction": 0.3},
+        ]},
+        {"displayName": "Claude Models", "buckets": [
+            {"bucketId": "claude-5h", "window": "5h", "remainingFraction": 0.7},
+        ]},
+    ]}
+
+    def fake_http_json(url, **kw):
+        if url.endswith("/token"):
+            return {"access_token": "at"}
+        if url.endswith(":loadCodeAssist"):
+            return {"currentTier": {"name": "pro"}}
+        return summary
+
+    with mock.patch.object(gemini, "get_gemini_refresh_token", lambda: "rt"),          mock.patch.object(gemini, "get_gemini_oauth_client", lambda: ("cid", "sec")),          mock.patch.object(gemini, "http_json", fake_http_json):
+        gem, argon = gemini.fetch_gemini_and_argon()
+
+    assert [(m.label, m.detail) for m in gem.metrics] == [
+        ("5시간 한도 잔여", False), ("7일 주간 잔여", False), ("Claude Models · 5시간 한도 잔여", True),
+    ], gem.metrics
+    assert len({m.key for m in gem.metrics}) == 3, "행마다 고유 키가 있어야 표시 설정이 섞이지 않는다"
+    assert argon.connected and argon.metrics[0].key == "argon.argon-weekly"
+
+
+def check_codex_additional_limits_are_detail(tmp: pathlib.Path) -> None:
+    """Codex 모델별 추가 한도는 이름을 붙인 세부 행으로 나와야 한다."""
+    (tmp / ".codex").mkdir()
+    (tmp / ".codex" / "auth.json").write_text(json.dumps({"tokens": {"access_token": "at"}}))
+    usage = {
+        "plan_type": "plus",
+        "rate_limit": {"primary_window": {"used_percent": 20, "limit_window_seconds": 18000}},
+        "additional_rate_limits": [{
+            "limit_name": "codex-mini",
+            "rate_limit": {"secondary_window": {"used_percent": 60, "limit_window_seconds": 604800}},
+        }],
+    }
+    with mock.patch.object(codex.pathlib.Path, "home", lambda: tmp),          mock.patch.object(codex, "http_json", lambda url, **kw: usage):
+        st = codex.fetch_codex()
+    assert [(m.label, m.remaining_percent, m.detail) for m in st.metrics] == [
+        ("5시간 한도 잔여", 80.0, False), ("codex-mini · 7일 주간 잔여", 40.0, True),
+    ], st
+
+
+def check_display_settings_persist(tmp: pathlib.Path) -> None:
+    """기본은 '기본 행 보임·세부 행 숨김'이고, 바꾼 값은 재시작 후에도 유지돼야 한다."""
+    path = tmp / "display.json"
+    base = QuotaMetric("5시간", 50.0, key="claude.five_hour")
+    detail = QuotaMetric("Opus", 50.0, key="claude.seven_day_opus", detail=True)
+
+    s = DisplaySettings(path)
+    assert s.card_visible("Codex") and s.metric_visible(base) and not s.metric_visible(detail)
+    s.set_card("Codex", False)
+    s.set_metric(detail, True)
+    s.set_metric(base, False)
+
+    s = DisplaySettings(path)
+    assert not s.card_visible("Codex") and s.metric_visible(detail) and not s.metric_visible(base)
+
+    path.write_text("{깨진 json")  # 파일이 깨져도 위젯은 기본값으로 떠야 한다
+    s = DisplaySettings(path)
+    assert s.card_visible("Codex") and not s.metric_visible(detail)
+
+
 if __name__ == "__main__":
     for check in (check_claude_refreshes_expired_token, check_gemini_picks_matching_secret,
-                  check_agy_found_on_path, check_login_ignores_stray_requests):
+                  check_agy_found_on_path, check_login_ignores_stray_requests,
+                  check_gemini_falls_back_to_bundled_client, check_gemini_keeps_other_groups_as_detail,
+                  check_codex_additional_limits_are_detail, check_display_settings_persist):
         with tempfile.TemporaryDirectory() as d:
             check(pathlib.Path(d))
         print("OK", check.__name__)

@@ -22,6 +22,7 @@ usage_widget/
 │   ├── theme.py              # 다크 테마 색상 팔레트 및 잔여량 경고 색상 계산
 │   ├── app.py                # UsageWidgetApp 플로팅 위젯 창 및 카드 렌더링
 │   ├── tray.py               # 시스템 트레이 아이콘(pystray) 및 작업 표시줄 노출 처리
+│   ├── settings.py           # ⚙ 표시 설정(카드 on/off, 세부 모델 행) 저장
 │   └── autostart.py          # Windows 시작 프로그램 등록(HKCU Run 레지스트리)
 ├── assets/
 │   ├── icon.ico              # 앱/트레이 로고
@@ -41,6 +42,14 @@ usage_widget/
   - **Claude**: 로컬 `~/.claude/.credentials.json` OAuth 토큰 자동 감지 및 `claude login` 연동. 재부팅 등으로 토큰이 만료돼 있으면 위젯이 직접 갱신해 같은 파일에 되써 넣습니다(Claude Code 와 토큰 공유).
   - **Codex**: 로컬 `~/.codex/auth.json` OAuth 토큰 자동 감지 및 `codex login` 연동
   - **Gemini & Argon**: 위젯 전용 OAuth(`~/.usage_widget/gemini_oauth.json`) → Windows 자격 증명 관리자(`gemini:antigravity`) → Antigravity IDE(`%APPDATA%/Antigravity/.../state.vscdb`) 순서로 자동 감지하며, OAuth 클라이언트 정보는 PC 의 agy 설치본에서 읽어 짝을 검증한 뒤 `~/.usage_widget/gemini_client.json` 에 캐싱합니다. 일반 Gemini 모델(5시간/주간)과 **Argon(`Gemini 4 Argon`)** 주간 쿼터를 별도 카드로 분리해 표시합니다.
+  - **Antigravity 를 안 써도 연동 가능 (배포용 exe)**: exe 에는 빌드 PC 에서 검증된 OAuth 클라이언트가 동봉되어 있어, agy 가 없는 PC 에서도 `계정 연동` → 브라우저 Google 로그인만 하면 됩니다. 소스 실행은 여전히 agy 설치본(또는 기존 캐시)이 필요합니다.
+- **⚙ 표시 설정 (카드·세부 모델 선택)**: 위젯 상단 `⚙` → 서비스별 하위 메뉴에서
+  - `카드 표시` 체크를 끄면 그 카드가 사라집니다 (예: Codex 를 안 쓰면 꺼서 빨간 '미연동' 카드를 숨김).
+  - 행 단위로 켜고 끕니다. 기본 행(5시간/주간)은 처음부터 보이고, **세부 모델 행**은 처음엔 숨겨져 있어 필요할 때 켭니다.
+    - Claude: `7일 Sonnet 잔여`, `7일 Opus 잔여` (요금제가 내려줄 때만 메뉴에 나타남)
+    - Codex: 모델별 추가 한도(`additional_rate_limits`, 예: `codex-mini · 7일 주간 잔여`)
+    - Gemini: Antigravity 의 다른 모델 그룹(예: `Claude and GPT models · 5시간 한도 잔여`)
+  - 설정은 `~/.usage_widget/display.json` 에 저장되어 재시작해도 유지됩니다.
 - **위젯 편의 기능**: 드래그 이동, 항상 위 고정(`📌`), 수동 새로고침(`↻`), 1분 주기 자동 갱신
 
 ## 배포용 exe 만들기
@@ -50,6 +59,7 @@ usage_widget/
 ```
 - 결과물: `dist\AIUsageWidget.exe` (단일 파일, 약 20MB). 이 파일 하나만 다른 PC에 복사해 실행하면 됩니다.
 - **python.org Python(`py` 런처)이 필요합니다.** Anaconda Python 으로 빌드하면 pyexpat DLL 충돌로 exe 가 시작 즉시 죽기 때문에, `build.bat` 은 `py -3` 로 전용 venv(`.venv-build`)를 만들어 그 안에서 빌드합니다.
+- **Gemini 클라이언트 동봉**: 빌드 PC 의 `~/.usage_widget/gemini_client.json`(위젯에서 Gemini 연동을 한 번 성공하면 생김)을 exe 안에 넣습니다. 파일이 없으면 `[WARN]` 을 띄우고, 그 exe 는 Antigravity 없는 PC 에서 Gemini 연동이 안 됩니다. 저장소에는 올라가지 않습니다.
 - 로고를 바꾸려면 `assets/make_icon.py` 를 수정 후 실행하고 다시 빌드합니다.
 - 실행 중인 exe 는 덮어쓸 수 없으므로 재빌드 전 트레이 메뉴 → 종료 하세요.
 
