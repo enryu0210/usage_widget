@@ -12,7 +12,7 @@ import pathlib
 import time
 import urllib.error
 
-from .base import ProviderStatus, QuotaMetric, format_reset, http_json
+from .base import ProviderStatus, QuotaMetric, format_reset, http_json, is_transient
 
 # Claude Code CLI 의 공개 OAuth 클라이언트 ID (비밀값이 아니라 앱 식별자).
 CLAUDE_CODE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
@@ -52,7 +52,7 @@ def _refresh_access_token(cred_path: pathlib.Path, raw: dict, oauth: dict) -> st
     last_error: Exception | None = None
     for url in TOKEN_URLS:
         try:
-            tok = http_json(url, method="POST", headers=headers, data=body)
+            tok = http_json(url, method="POST", headers=headers, data=body, retries=0)
             break
         except urllib.error.HTTPError as e:
             # 404/403 은 주소 문제일 수 있어 다음 주소로 넘어가고, 400/401 은 토큰 자체가 무효라 바로 중단한다.
@@ -119,6 +119,8 @@ def fetch_claude(cred_path: pathlib.Path | None = None) -> ProviderStatus:
 
         return ProviderStatus("Claude", True, plan=plan, metrics=metrics)
     except urllib.error.HTTPError as e:
-        return ProviderStatus("Claude", False, error=f"API 오류 ({e.code}) - 재로그인 필요")
+        return ProviderStatus(
+            "Claude", False, error=f"API 오류 ({e.code}) - 재로그인 필요", transient=is_transient(e)
+        )
     except Exception as e:
-        return ProviderStatus("Claude", False, error=f"조회 실패: {e}")
+        return ProviderStatus("Claude", False, error=f"조회 실패: {e}", transient=is_transient(e))

@@ -9,6 +9,8 @@ from __future__ import annotations
 import datetime as dt
 import json
 import pathlib
+import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -40,6 +42,17 @@ class ProviderStatus:
     account: str = ""
     metrics: list[QuotaMetric] = field(default_factory=list)
     error: str = ""
+    # 시간 초과·네트워크 끊김처럼 잠시 뒤 저절로 풀리는 실패. UI 는 이때 직전 값을 지우지 않고 유지한다.
+    transient: bool = False
+
+
+def is_transient(exc: Exception) -> bool:
+    """재로그인이 필요한 실패(HTTP 4xx 등)와 달리, 기다리면 풀리는 네트워크 실패인지 판별한다."""
+    if isinstance(exc, urllib.error.HTTPError):
+        # 429(요청 과다)·5xx(서버 장애)만 일시적. 401/403 은 진짜 인증 문제라 재로그인이 필요하다.
+        return exc.code == 429 or exc.code >= 500
+    # URLError 는 DNS 실패·연결 거부·응답 시간 초과를 모두 감싼다.
+    return isinstance(exc, (TimeoutError, ConnectionError, urllib.error.URLError))
 
 
 def http_json(
@@ -48,12 +61,25 @@ def http_json(
     method: str = "GET",
     headers: dict[str, str] | None = None,
     data: bytes | None = None,
-    timeout: float = 8.0,
+    timeout: float = 15.0,
+    retries: int = 1,
 ) -> dict:
-    """외부 패키지(requests 등) 설치 없이 표준 urllib 만으로 JSON API를 호출한다."""
+    """외부 패키지(requests 등) 설치 없이 표준 urllib 만으로 JSON API를 호출한다.
+
+    사용량 API 는 가끔 응답이 늦어 'timed out' 이 나므로, 일시적 실패에 한해 잠깐 쉬고 다시 시도한다.
+    단 일회용 값(인가 코드, 회전되는 refresh token)을 보내는 호출은 서버가 이미 처리했을 수 있어
+    재전송하면 오히려 토큰이 무효가 되므로 호출부에서 retries=0 을 넘긴다.
+    """
     req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            if attempt >= retries or not is_transient(e):
+                raise
+            time.sleep(2 * (attempt + 1))  # 서버가 잠깐 바쁜 경우를 위해 짧게 간격을 둔다
+    raise AssertionError("unreachable")  # 루프는 반드시 return 또는 raise 로 끝난다
 
 
 def format_reset(iso_or_epoch: str | int | float | None) -> str:

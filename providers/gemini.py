@@ -17,7 +17,7 @@ import sys
 import urllib.error
 import urllib.parse
 
-from .base import WIDGET_CONFIG_DIR, ProviderStatus, QuotaMetric, format_reset, http_json
+from .base import WIDGET_CONFIG_DIR, ProviderStatus, QuotaMetric, format_reset, http_json, is_transient
 
 
 def _is_valid_client_pair(client_id: str, client_secret: str) -> bool:
@@ -331,13 +331,15 @@ def fetch_gemini_and_argon() -> tuple[ProviderStatus, ProviderStatus]:
         return gemini_status, argon_status
     except urllib.error.HTTPError as e:
         err_msg = f"API 오류 ({e.code}) - 재연동 필요"
+        transient = is_transient(e)
         return (
-            ProviderStatus("Gemini", False, error=err_msg),
-            ProviderStatus("Argon", False, error=err_msg),
+            ProviderStatus("Gemini", False, error=err_msg, transient=transient),
+            ProviderStatus("Argon", False, error=err_msg, transient=transient),
         )
     except Exception as e:
         err_msg = f"조회 실패: {e}"
+        transient = is_transient(e)
         return (
-            ProviderStatus("Gemini", False, error=err_msg),
-            ProviderStatus("Argon", False, error=err_msg),
+            ProviderStatus("Gemini", False, error=err_msg, transient=transient),
+            ProviderStatus("Argon", False, error=err_msg, transient=transient),
         )

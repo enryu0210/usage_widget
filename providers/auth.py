@@ -90,7 +90,9 @@ def link_gemini_oauth(timeout_sec: int = 300) -> bool:
         }
     ).encode("utf-8")
     try:
-        tok_res = http_json("https://oauth2.googleapis.com/token", method="POST", data=tok_data)
+        tok_res = http_json(
+            "https://oauth2.googleapis.com/token", method="POST", data=tok_data, retries=0
+        )
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"Google 토큰 교환 실패 ({e.code})") from e
     if "refresh_token" in tok_res:

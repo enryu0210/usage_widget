@@ -11,11 +11,13 @@ import pathlib
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from unittest import mock
 
-from providers import QuotaMetric, auth, claude, codex, gemini
+from providers import ProviderStatus, QuotaMetric, auth, base, claude, codex, gemini
+from ui.app import UsageWidgetApp
 from ui.settings import DisplaySettings
 
 
@@ -208,11 +210,52 @@ def check_display_settings_persist(tmp: pathlib.Path) -> None:
     assert s.card_visible("Codex") and not s.metric_visible(detail)
 
 
+def check_timeout_retries_and_keeps_previous(tmp: pathlib.Path) -> None:
+    """시간 초과는 1회 재시도하고, 그래도 실패하면 카드가 직전 값을 유지해야 한다(인증 실패는 그대로 노출)."""
+    calls = []
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return b'{"ok": 1}'
+
+    def flaky_urlopen(req, timeout):
+        calls.append(1)
+        if len(calls) == 1:
+            raise urllib.error.URLError(TimeoutError("timed out"))
+        return FakeResp()
+
+    with mock.patch.object(base.urllib.request, "urlopen", flaky_urlopen),          mock.patch.object(base.time, "sleep", lambda s: None):
+        assert base.http_json("https://x") == {"ok": 1} and len(calls) == 2
+        calls.clear()
+        try:  # retries=0 (일회용 토큰 호출)은 재전송하면 안 된다
+            base.http_json("https://x", retries=0)
+            raise AssertionError("재시도하면 안 됨")
+        except urllib.error.URLError:
+            assert len(calls) == 1
+
+    assert base.is_transient(urllib.error.HTTPError("u", 429, "", {}, None))
+    assert not base.is_transient(urllib.error.HTTPError("u", 401, "", {}, None))
+
+    good = ProviderStatus("Claude", True, metrics=[QuotaMetric("5시간", 40.0)])
+    app = mock.Mock(_last_statuses=[good, ProviderStatus("Codex", True)])
+    merged = UsageWidgetApp._keep_previous_on_transient(app, [
+        ProviderStatus("Claude", False, error="조회 실패: timed out", transient=True),
+        ProviderStatus("Codex", False, error="API 오류 (401)"),
+    ])
+    assert merged[0].connected and merged[0].metrics == good.metrics and "이전 값" in merged[0].error
+    assert not merged[1].connected  # 인증 실패는 덮지 않는다
+
+
 if __name__ == "__main__":
     for check in (check_claude_refreshes_expired_token, check_gemini_picks_matching_secret,
                   check_agy_found_on_path, check_login_ignores_stray_requests,
                   check_gemini_falls_back_to_bundled_client, check_gemini_keeps_other_groups_as_detail,
-                  check_codex_additional_limits_are_detail, check_display_settings_persist):
+                  check_codex_additional_limits_are_detail, check_display_settings_persist,
+                  check_timeout_retries_and_keeps_previous):
         with tempfile.TemporaryDirectory() as d:
             check(pathlib.Path(d))
         print("OK", check.__name__)

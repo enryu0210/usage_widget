@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import threading
 import tkinter as tk
@@ -35,10 +36,11 @@ class UsageWidgetApp:
         self.root.title("AI Usage Widget")
         self.root.configure(bg=BG_MAIN)
 
-        # Windows 위젯 형태: 타이틀바 제거, 항상 위, 약간 반투명
-        self.topmost = True
+        # Windows 위젯 형태: 타이틀바 제거, 항상 위, 약간 반투명.
+        # 타이틀바가 없어 작업 표시줄로 다시 불러올 수 없으므로 '고정 해제'는 두지 않고,
+        # 가리고 싶을 때는 트레이 아이콘 클릭으로 숨긴다.
         self.root.overrideredirect(True)
-        self.root.attributes("-topmost", self.topmost)
+        self.root.attributes("-topmost", True)
         self.root.attributes("-alpha", 0.95)
 
         # 우측 상단 기본 배치 (창 너비 320px 기준)
@@ -88,7 +90,7 @@ class UsageWidgetApp:
         self._schedule_auto_refresh()
 
     def _build_header(self) -> None:
-        """드래그 이동 핸들 및 제어 버튼(새로고침, 고정, 닫기)이 있는 상단 바를 생성한다."""
+        """드래그 이동 핸들 및 제어 버튼(새로고침, 표시 설정, 닫기)이 있는 상단 바를 생성한다."""
         header = tk.Frame(self.outer, bg=BG_MAIN, cursor="fleur")
         header.pack(fill="x")
 
@@ -130,18 +132,6 @@ class UsageWidgetApp:
         btn_settings.pack(side="right")
         btn_settings.bind("<Button-1>", self._open_display_menu)
 
-        self.btn_pin = tk.Label(
-            header,
-            text="📌",
-            bg=BG_MAIN,
-            fg=FG_TEXT,
-            font=("Segoe UI Emoji", 9),
-            padx=4,
-            cursor="hand2",
-        )
-        self.btn_pin.pack(side="right")
-        self.btn_pin.bind("<Button-1>", lambda _e: self._toggle_topmost())
-
         self.btn_refresh = tk.Label(
             header,
             text="↻",
@@ -163,12 +153,6 @@ class UsageWidgetApp:
         y = event.y_root - self._drag_y
         self.root.geometry(f"+{x}+{y}")
 
-    def _toggle_topmost(self) -> None:
-        """다른 창 위에 항상 고정할지 여부를 토글한다."""
-        self.topmost = not self.topmost
-        self.root.attributes("-topmost", self.topmost)
-        self.btn_pin.configure(fg=FG_TEXT if self.topmost else FG_SUB)
-
     def _on_close(self) -> None:
         """트레이가 있으면 숨기기만 한다(시작 프로그램 위젯을 실수로 꺼버리지 않도록). 종료는 트레이 메뉴에서."""
         if self.tray:
@@ -177,9 +161,15 @@ class UsageWidgetApp:
             self.quit()
 
     def toggle_visible(self) -> None:
+        """트레이 아이콘 클릭: 숨겨져 있으면 맨 앞에 나타내고, 보이면 숨긴다.
+
+        타이틀바 없는(overrideredirect) 창은 Tk 에서 iconify(최소화)가 안 되므로 withdraw 로 숨긴다.
+        """
         if self.root.state() == "withdrawn":
             self.root.deiconify()
-            self.root.attributes("-topmost", self.topmost)  # 다시 보일 때 고정 상태 재적용
+            # 숨겨진 사이 전체 화면 앱 등이 topmost 를 가져갔을 수 있어 다시 맨 위로 올린다.
+            self.root.attributes("-topmost", True)
+            self.root.lift()
         else:
             self.root.withdraw()
 
@@ -285,13 +275,30 @@ class UsageWidgetApp:
     def _render_statuses(self, statuses: list[ProviderStatus]) -> None:
         """조회 결과를 저장하고 카드를 다시 그린 뒤 갱신 시각을 표시한다."""
         self._is_loading = False
-        self._last_statuses = statuses
+        self._last_statuses = self._keep_previous_on_transient(statuses)
         self._render_cards()
         now_str = dt.datetime.now().strftime("%H:%M:%S")
+        interval_min = REFRESH_INTERVAL_MS // 60_000
         if any(self.display.card_visible(st.name) for st in statuses):
-            self.status_label.configure(text=f"최근 업데이트: {now_str} (1분마다 자동 갱신)")
+            self.status_label.configure(text=f"최근 업데이트: {now_str} ({interval_min}분마다 자동 갱신)")
         else:
             self.status_label.configure(text="모든 카드가 숨겨져 있습니다. ⚙ 에서 켜주세요.")
+
+    def _keep_previous_on_transient(self, statuses: list[ProviderStatus]) -> list[ProviderStatus]:
+        """시간 초과 같은 일시적 실패 한 번에 카드가 빨간 오류로 바뀌지 않도록 직전 성공 값을 유지한다.
+
+        인증 실패(401 등)는 사용자가 재연동해야 하므로 그대로 오류를 보여준다.
+        """
+        previous = {st.name: st for st in self._last_statuses}
+        merged = []
+        for st in statuses:
+            prev = previous.get(st.name)
+            if st.transient and prev and prev.connected:
+                # 직전 값도 이미 '이전 값'이었다면 처음 실패 시각의 경고문을 그대로 둔다.
+                warning = prev.error or f"⚠ 조회 지연 - {dt.datetime.now():%H:%M} 이전 값 표시 중"
+                st = dataclasses.replace(prev, error=warning)
+            merged.append(st)
+        return merged
 
     def _render_cards(self) -> None:
         """표시 설정에서 켜진 카드만 그린다(숨긴 카드도 조회는 계속해 메뉴에 행 목록을 보여준다)."""
@@ -381,6 +388,17 @@ class UsageWidgetApp:
             )
             err_lbl.pack(fill="x", pady=(4, 0))
             return
+
+        # 연동은 됐지만 이번 조회가 일시적으로 실패해 직전 값을 보여주는 중임을 알린다.
+        if st.error:
+            tk.Label(
+                card,
+                text=st.error,
+                bg=BG_CARD,
+                fg="#f4a261",
+                font=("Malgun Gothic", 7),
+                anchor="w",
+            ).pack(fill="x", pady=(4, 0))
 
         # 쿼터 프로그레스 바 렌더링 (⚙ 에서 끈 행은 건너뛴다)
         for m in st.metrics:

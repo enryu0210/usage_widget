@@ -16,7 +16,8 @@ BRAND_COLORS = {
     "Argon": "#a855f7",
 }
 
-REFRESH_INTERVAL_MS = 60_000  # 1분 주기 자동 갱신
+# 1분 주기는 사용량 API 가 자주 'timed out'/429 로 응답해 5분으로 늘렸다(잔여율은 분 단위로 급변하지 않는다).
+REFRESH_INTERVAL_MS = 300_000
 
 
 def bar_color(percent: float, brand_color: str) -> str:

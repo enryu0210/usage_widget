@@ -10,7 +10,7 @@ import json
 import pathlib
 import urllib.error
 
-from .base import ProviderStatus, QuotaMetric, format_reset, http_json
+from .base import ProviderStatus, QuotaMetric, format_reset, http_json, is_transient
 
 
 def _window_label(win: dict, default_label: str) -> str:
@@ -88,6 +88,8 @@ def fetch_codex() -> ProviderStatus:
 
         return ProviderStatus("Codex", True, plan=plan, account=email, metrics=metrics)
     except urllib.error.HTTPError as e:
-        return ProviderStatus("Codex", False, error=f"API 오류 ({e.code}) - 재로그인 필요")
+        return ProviderStatus(
+            "Codex", False, error=f"API 오류 ({e.code}) - 재로그인 필요", transient=is_transient(e)
+        )
     except Exception as e:
-        return ProviderStatus("Codex", False, error=f"조회 실패: {e}")
+        return ProviderStatus("Codex", False, error=f"조회 실패: {e}", transient=is_transient(e))

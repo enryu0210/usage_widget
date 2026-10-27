@@ -50,7 +50,7 @@ usage_widget/
     - Codex: 모델별 추가 한도(`additional_rate_limits`, 예: `codex-mini · 7일 주간 잔여`)
     - Gemini: Antigravity 의 다른 모델 그룹(예: `Claude and GPT models · 5시간 한도 잔여`)
   - 설정은 `~/.usage_widget/display.json` 에 저장되어 재시작해도 유지됩니다.
-- **위젯 편의 기능**: 드래그 이동, 항상 위 고정(`📌`), 수동 새로고침(`↻`), 1분 주기 자동 갱신
+- **위젯 편의 기능**: 드래그 이동, 항상 위 표시(트레이 아이콘 클릭으로 보이기/숨기기), 수동 새로고침(`↻`), 5분 주기 자동 갱신(시간 초과 시 1회 재시도 후 직전 값 유지)
 
 ## 배포용 exe 만들기
 
