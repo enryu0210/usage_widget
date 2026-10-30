@@ -30,6 +30,8 @@
 3. `gh release create v1.0.5 dist\AIUsageWidget.exe --title "v1.0.5 — ..." --notes "..."`
    - 태그는 반드시 `APP_VERSION` 과 같은 번호, 첨부 파일 이름은 반드시 `AIUsageWidget.exe`.
    - 첨부 즉시 모든 친구 PC 에 하루 안에 퍼진다 → **올리기 전에 직접 한 번 실행해 볼 것.**
+   - 레포에 Immutable releases 가 켜져 있어(2026-10-30~) **발행 후에는 exe 교체·태그 이동이 안 된다.**
+     잘못 올렸으면 고치지 말고 버전을 하나 더 올려 새로 릴리스한다.
 
 ## 4. Claude 새 모델 한도 (`providers/claude.py` `_usage_windows`)
 - 기존 4개 키(5시간/7일/Sonnet/Opus)는 그대로.
@@ -60,5 +62,9 @@
 - **공급망 리스크**: GitHub 계정이 털리면 악성 exe 가 모든 친구 PC 에 자동 설치된다.
   sha256 은 전송 중 손상만 막고, 계정 탈취는 못 막는다 → GitHub 2FA 필수.
   더 막으려면 코드 서명 또는 공개키 서명 검증이 필요(현재 미적용).
+  - 적용된 완화책(2026-10-30): GitHub 2FA, `gh` 토큰은 keyring 저장 OAuth(`gho_`, 기본 스코프),
+    Immutable releases 켬 (v1.0.6 부터 적용, 기존 v1.0.5 이하는 소급 안 됨 — 새 버전이 나오면 무관).
+  - **계정명(`enryu0210`) 변경·레포 삭제·레포 이름 변경 금지.** 업데이터 주소가 exe 에 박혀 있어
+    그 이름을 남이 선점하면 업데이트 서버를 빼앗긴다(repo-jacking). 정리하려면 Archive 만 한다.
 - `Program Files` 처럼 쓰기 권한 없는 곳에 두면 업데이트가 조용히 실패한다 (Downloads·바탕화면 등은 OK).
 - 업데이트 시 위젯이 예고 없이 2~3초 사라졌다 다시 뜬다.
