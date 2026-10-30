@@ -25,7 +25,8 @@
 
 ## 3. 릴리스 절차 (중요)
 1. `ui/updater.py` 의 `APP_VERSION` 을 올린다 (예: `1.0.5`).
-2. `.\build.bat`
+2. `.\build.bat` — 마지막에 Defender 검사까지 한다. `[ERROR] Defender ...` 가 뜨면 그 exe 는 올리지 말고 다시 빌드
+   (v1.0.4 오탐 사고, `docs/defender-false-positive/` 참고).
 3. `gh release create v1.0.5 dist\AIUsageWidget.exe --title "v1.0.5 — ..." --notes "..."`
    - 태그는 반드시 `APP_VERSION` 과 같은 번호, 첨부 파일 이름은 반드시 `AIUsageWidget.exe`.
    - 첨부 즉시 모든 친구 PC 에 하루 안에 퍼진다 → **올리기 전에 직접 한 번 실행해 볼 것.**

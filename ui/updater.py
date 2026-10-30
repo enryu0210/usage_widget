@@ -25,7 +25,7 @@ from providers.base import http_json
 if TYPE_CHECKING:
     from .app import UsageWidgetApp
 
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.5"
 LATEST_RELEASE_URL = "https://api.github.com/repos/enryu0210/usage_widget/releases/latest"
 ASSET_NAME = "AIUsageWidget.exe"
 CHECK_INTERVAL_SEC = 24 * 3600  # 위젯은 시작 프로그램으로 며칠씩 켜져 있으므로 하루 한 번 다시 본다.
