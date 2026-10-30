@@ -8,23 +8,37 @@ from __future__ import annotations
 
 import ctypes
 import sys
+import time
 import tkinter as tk
 
-from ui import UsageWidgetApp, autostart, start_tray
+from ui import UsageWidgetApp, autostart, start_tray, updater
 
 ERROR_ALREADY_EXISTS = 183
 
 
-def already_running() -> bool:
-    """시작 프로그램 + 수동 실행으로 위젯·트레이 아이콘이 두 개 뜨는 것을 막는다(명명된 뮤텍스)."""
-    # 반환된 핸들은 프로세스 종료 시 OS 가 회수하므로 일부러 닫지 않는다(닫으면 잠금이 풀린다).
-    ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\AIUsageWidget")
-    return ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS
+def already_running(wait_seconds: float = 0) -> bool:
+    """시작 프로그램 + 수동 실행으로 위젯·트레이 아이콘이 두 개 뜨는 것을 막는다(명명된 뮤텍스).
+
+    자동 업데이트 직후에는 이전 프로세스가 종료되는 중이라 잠깐 뮤텍스를 쥐고 있으므로,
+    wait_seconds 동안은 풀리기를 기다렸다가 다시 잡아 본다.
+    """
+    kernel32 = ctypes.windll.kernel32
+    deadline = time.monotonic() + wait_seconds
+    while True:
+        # 잡은 핸들은 프로세스 종료 시 OS 가 회수하므로 일부러 닫지 않는다(닫으면 잠금이 풀린다).
+        handle = kernel32.CreateMutexW(None, False, "Local\\AIUsageWidget")
+        if kernel32.GetLastError() != ERROR_ALREADY_EXISTS:
+            return False
+        kernel32.CloseHandle(handle)  # 남이 쥔 뮤텍스에 대한 내 참조만 놓는다
+        if time.monotonic() >= deadline:
+            return True
+        time.sleep(0.5)
 
 
 def main() -> None:
     is_check = "--check" in sys.argv
-    if not is_check and already_running():
+    wait = 15 if updater.UPDATED_FLAG in sys.argv else 0
+    if not is_check and already_running(wait):
         return
 
     autostart.register_on_launch()
@@ -32,6 +46,8 @@ def main() -> None:
     root = tk.Tk()
     app = UsageWidgetApp(root)
     app.tray = start_tray(app)
+    if not is_check:
+        updater.start(app)
 
     # 자동 검증 모드 (--check): 실제 렌더링까지 마친 뒤 '표시 설정에서 켠 카드' 수만큼 그려졌는지 검증하고 종료한다.
     if is_check:

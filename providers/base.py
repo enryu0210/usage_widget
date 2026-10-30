@@ -30,6 +30,8 @@ class QuotaMetric:
     key: str = ""
     # 모델별 세부 한도처럼 '있으면 좋은' 행. 기본 화면이 복잡해지지 않게 처음엔 숨긴다.
     detail: bool = False
+    # 잔여 % 없이 '사용 가능/한도 도달'만 알려주는 한도(예: Codex model_usage)용. 있으면 막대 대신 이 문구를 보여준다.
+    status_text: str = ""
 
 
 @dataclass

@@ -49,6 +49,37 @@ def _window_metrics(
     return metrics
 
 
+def _model_label(model_id: str) -> str:
+    """API 모델 ID 를 읽기 쉬운 이름으로 바꾼다. 예: 'gpt-6-astra' → 'GPT-6 Astra'."""
+    parts = model_id.split("-")
+    if len(parts) >= 2 and parts[0].lower() == "gpt":
+        return " ".join([f"GPT-{parts[1]}"] + [p.title() for p in parts[2:]])
+    return " ".join(p.title() for p in parts)
+
+
+def _model_usage_metrics(model_usage: dict) -> list[QuotaMetric]:
+    """model_usage(예: gpt-6-astra)의 사용 가능 여부를 상태 행으로 만든다.
+
+    이 항목은 잔여 % 를 주지 않고 '지금 쓸 수 있는지'와 '언제 다시 되는지'만 준다.
+    그래서 막대 대신 상태 문구로 보여주고, 사용 불가일 때는 경고색(0%)으로 눈에 띄게 한다.
+    """
+    metrics: list[QuotaMetric] = []
+    for model_id, info in model_usage.items():
+        if not isinstance(info, dict):
+            continue
+        available = bool(info.get("available"))
+        metrics.append(
+            QuotaMetric(
+                _model_label(str(model_id)),
+                100.0 if available else 0.0,
+                "" if available else format_reset(info.get("available_at")),
+                key=f"codex.model.{model_id}",
+                status_text="사용 가능" if available else "한도 도달",
+            )
+        )
+    return metrics
+
+
 def fetch_codex() -> ProviderStatus:
     """Codex CLI 로컬 OAuth 토큰으로 WHAM 사용량 API를 호출해 잔여량을 계산한다."""
     auth_path = pathlib.Path.home() / ".codex" / "auth.json"
@@ -86,6 +117,7 @@ def fetch_codex() -> ProviderStatus:
                 extra.get("rate_limit") or {}, f"codex.{name}", name_prefix=f"{name} · ", detail=True
             )
 
+        metrics += _model_usage_metrics(usage.get("model_usage") or {})
         return ProviderStatus("Codex", True, plan=plan, account=email, metrics=metrics)
     except urllib.error.HTTPError as e:
         return ProviderStatus(

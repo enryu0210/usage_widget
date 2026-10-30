@@ -14,7 +14,7 @@ import winreg
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import autostart
+from . import autostart, updater
 
 if TYPE_CHECKING:
     from .app import UsageWidgetApp
@@ -52,7 +52,7 @@ def start_tray(app: UsageWidgetApp):
         pystray.MenuItem("종료", on_main(app.quit)),
     )
     try:
-        icon = pystray.Icon("AIUsageWidget", Image.open(ICON_PATH), "AI 잔여 사용량", menu)
+        icon = pystray.Icon("AIUsageWidget", Image.open(ICON_PATH), f"AI 잔여 사용량 v{updater.APP_VERSION}", menu)
     except OSError:
         return None  # 아이콘 파일 누락 시 트레이 없이 실행
     def on_ready(icon) -> None:

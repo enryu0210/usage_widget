@@ -31,6 +31,24 @@ USAGE_WINDOWS = (
     ("seven_day_sonnet", "7일 Sonnet 잔여", True),
     ("seven_day_opus", "7일 Opus 잔여", True),
 )
+# 위 목록에 없는 새 모델 한도(예: seven_day_fable)도 업데이트 없이 보이도록 접두어로 알아본다.
+WINDOW_PREFIXES = (("five_hour_", "5시간"), ("seven_day_", "7일"))
+
+
+def _usage_windows(usage: dict) -> list[tuple[str, str, bool]]:
+    """알려진 한도 창 + 응답에 새로 나타난 모델별 한도 창 목록을 (키, 라벨, 세부 여부)로 만든다."""
+    windows = list(USAGE_WINDOWS)
+    known = {key for key, _, _ in USAGE_WINDOWS}
+    for key in usage:
+        if key in known:
+            continue
+        for prefix, period in WINDOW_PREFIXES:
+            if key.startswith(prefix):
+                model = key[len(prefix):].replace("_", " ").title()
+                # 어떤 모델이 올지 모르므로 기본 화면을 어지럽히지 않게 세부 행(기본 숨김)으로 둔다.
+                windows.append((key, f"{period} {model} 잔여", True))
+                break
+    return windows
 
 
 def _refresh_access_token(cred_path: pathlib.Path, raw: dict, oauth: dict) -> str:
@@ -105,7 +123,7 @@ def fetch_claude(cred_path: pathlib.Path | None = None) -> ProviderStatus:
         )
 
         metrics: list[QuotaMetric] = []
-        for key, label, detail in USAGE_WINDOWS:
+        for key, label, detail in _usage_windows(usage):
             win = usage.get(key)
             if isinstance(win, dict) and win.get("utilization") is not None:
                 used = float(win["utilization"])

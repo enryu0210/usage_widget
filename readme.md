@@ -4,7 +4,7 @@ Claude, Codex, Gemini 및 Argon(`Gemini 4 Argon`) 계정을 연동하여 각 서
 
 ## 다운로드
 [Releases](https://github.com/enryu0210/usage_widget/releases/latest) 에서 `AIUsageWidget.exe` 를 내려받아 실행하면 됩니다(파이썬 불필요).
-처음 실행 시 시작 프로그램에 자동 등록되고 트레이에 아이콘이 뜹니다. 서명되지 않은 exe 라 SmartScreen 경고가 뜨면 **추가 정보 → 실행** 을 누르세요.
+처음 실행 시 시작 프로그램에 자동 등록되고 트레이에 아이콘이 뜹니다. v1.0.4 부터는 새 버전이 나오면 **자동으로 내려받아 교체**됩니다(트레이 아이콘에 마우스를 올리면 현재 버전 표시). 서명되지 않은 exe 라 SmartScreen 경고가 뜨면 **추가 정보 → 실행** 을 누르세요.
 
 ## 프로젝트 폴더 구조
 ```text
@@ -23,6 +23,7 @@ usage_widget/
 │   ├── app.py                # UsageWidgetApp 플로팅 위젯 창 및 카드 렌더링
 │   ├── tray.py               # 시스템 트레이 아이콘(pystray) 및 작업 표시줄 노출 처리
 │   ├── settings.py           # ⚙ 표시 설정(카드 on/off, 세부 모델 행) 저장
+│   ├── updater.py            # GitHub Releases 자동 업데이트 (APP_VERSION)
 │   └── autostart.py          # Windows 시작 프로그램 등록(HKCU Run 레지스트리)
 ├── assets/
 │   ├── icon.ico              # 앱/트레이 로고
@@ -47,9 +48,11 @@ usage_widget/
   - `카드 표시` 체크를 끄면 그 카드가 사라집니다 (예: Codex 를 안 쓰면 꺼서 빨간 '미연동' 카드를 숨김).
   - 행 단위로 켜고 끕니다. 기본 행(5시간/주간)은 처음부터 보이고, **세부 모델 행**은 처음엔 숨겨져 있어 필요할 때 켭니다.
     - Claude: `7일 Sonnet 잔여`, `7일 Opus 잔여` (요금제가 내려줄 때만 메뉴에 나타남)
-    - Codex: 모델별 추가 한도(`additional_rate_limits`, 예: `codex-mini · 7일 주간 잔여`)
+    - Codex: 모델별 추가 한도(`additional_rate_limits`, 예: `codex-mini · 7일 주간 잔여`). 모델별 사용 가능 여부(`GPT-6 Astra`)는 기본 표시
     - Gemini: Antigravity 의 다른 모델 그룹(예: `Claude and GPT models · 5시간 한도 잔여`)
   - 설정은 `~/.usage_widget/display.json` 에 저장되어 재시작해도 유지됩니다.
+- **자동 업데이트**: exe 가 시작 시와 하루마다 GitHub 최신 릴리스를 확인해, 새 버전이면 내려받아 sha256 을 검증한 뒤 스스로 교체하고 재시작합니다. 상세는 `docs/auto-update/README.md`.
+- **새 모델 자동 표시**: Claude 사용량 API 가 새 모델 한도(`seven_day_*` 등)를 내려주면 업데이트 없이도 ⚙ 세부 행에 나타납니다. Codex 카드에는 모델별 사용 가능 여부(예: `GPT-6 Astra · 사용 가능` / `한도 도달 · N시간 후 초기화`)가 표시됩니다.
 - **위젯 편의 기능**: 드래그 이동, 항상 위 표시(트레이 아이콘 클릭으로 보이기/숨기기), 수동 새로고침(`↻`), 5분 주기 자동 갱신(시간 초과 시 1회 재시도 후 직전 값 유지)
 
 ## 배포용 exe 만들기
@@ -62,6 +65,7 @@ usage_widget/
 - **Gemini 클라이언트 동봉**: 빌드 PC 의 `~/.usage_widget/gemini_client.json`(위젯에서 Gemini 연동을 한 번 성공하면 생김)을 exe 안에 넣습니다. 파일이 없으면 `[WARN]` 을 띄우고, 그 exe 는 Antigravity 없는 PC 에서 Gemini 연동이 안 됩니다. 저장소에는 올라가지 않습니다.
 - 로고를 바꾸려면 `assets/make_icon.py` 를 수정 후 실행하고 다시 빌드합니다.
 - 실행 중인 exe 는 덮어쓸 수 없으므로 재빌드 전 트레이 메뉴 → 종료 하세요.
+- **릴리스**: `ui/updater.py` 의 `APP_VERSION` 을 올리고 빌드 → `gh release create v<같은번호> dist\AIUsageWidget.exe`. 올리는 즉시 모든 사용자에게 자동 배포되므로 먼저 직접 실행해 볼 것.
 
 ## 실행 방법
 

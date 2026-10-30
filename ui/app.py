@@ -420,32 +420,33 @@ class UsageWidgetApp:
 
             tk.Label(
                 lbl_row,
-                text=f"{m.remaining_percent:.1f}%",
+                text=m.status_text or f"{m.remaining_percent:.1f}%",
                 bg=BG_CARD,
                 fg=bar_color(m.remaining_percent, brand_color),
                 font=("Malgun Gothic", 8, "bold"),
             ).pack(side="right")
 
-            # 프로그레스 바 캔버스
-            bar_w = 272
-            canvas = tk.Canvas(
-                row,
-                width=bar_w,
-                height=7,
-                bg=BG_BAR,
-                highlightthickness=0,
-            )
-            canvas.pack(fill="x", pady=(2, 1))
-            fill_w = int(bar_w * max(0.0, min(100.0, m.remaining_percent)) / 100.0)
-            if fill_w > 0:
-                canvas.create_rectangle(
-                    0,
-                    0,
-                    fill_w,
-                    7,
-                    fill=bar_color(m.remaining_percent, brand_color),
-                    width=0,
+            # 프로그레스 바 캔버스. 상태 행은 실제 잔여 % 가 없으므로 가짜 막대를 그리지 않는다.
+            if not m.status_text:
+                bar_w = 272
+                canvas = tk.Canvas(
+                    row,
+                    width=bar_w,
+                    height=7,
+                    bg=BG_BAR,
+                    highlightthickness=0,
                 )
+                canvas.pack(fill="x", pady=(2, 1))
+                fill_w = int(bar_w * max(0.0, min(100.0, m.remaining_percent)) / 100.0)
+                if fill_w > 0:
+                    canvas.create_rectangle(
+                        0,
+                        0,
+                        fill_w,
+                        7,
+                        fill=bar_color(m.remaining_percent, brand_color),
+                        width=0,
+                    )
 
             if m.reset_text:
                 tk.Label(

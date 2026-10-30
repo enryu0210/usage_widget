@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pathlib
@@ -17,6 +18,7 @@ import urllib.request
 from unittest import mock
 
 from providers import ProviderStatus, QuotaMetric, auth, base, claude, codex, gemini
+from ui import updater
 from ui.app import UsageWidgetApp
 from ui.settings import DisplaySettings
 
@@ -190,6 +192,30 @@ def check_codex_additional_limits_are_detail(tmp: pathlib.Path) -> None:
     ], st
 
 
+def check_codex_model_usage_shows_status(tmp: pathlib.Path) -> None:
+    """model_usage(예: gpt-6-astra)는 % 대신 사용 가능/한도 도달 상태 행으로 나와야 한다."""
+    (tmp / ".codex").mkdir()
+    (tmp / ".codex" / "auth.json").write_text(json.dumps({"tokens": {"access_token": "at"}}))
+    reset_at = int(time.time()) + 3 * 3600 + 120
+    usage = {
+        "plan_type": "pro",
+        "rate_limit": {"primary_window": {"used_percent": 7, "limit_window_seconds": 604800}},
+        "model_usage": {
+            "gpt-6-astra": {"available": True, "available_at": None},
+            "gpt-7-nova": {"available": False, "available_at": reset_at},
+            "broken": None,
+        },
+    }
+    with mock.patch.object(codex.pathlib.Path, "home", lambda: tmp),          mock.patch.object(codex, "http_json", lambda url, **kw: usage):
+        st = codex.fetch_codex()
+    rows = [(m.label, m.status_text, m.remaining_percent, m.detail, m.key) for m in st.metrics[1:]]
+    assert rows == [
+        ("GPT-6 Astra", "사용 가능", 100.0, False, "codex.model.gpt-6-astra"),
+        ("GPT-7 Nova", "한도 도달", 0.0, False, "codex.model.gpt-7-nova"),
+    ], rows
+    assert st.metrics[2].reset_text.startswith("3시간"), st.metrics[2].reset_text
+
+
 def check_display_settings_persist(tmp: pathlib.Path) -> None:
     """기본은 '기본 행 보임·세부 행 숨김'이고, 바꾼 값은 재시작 후에도 유지돼야 한다."""
     path = tmp / "display.json"
@@ -250,12 +276,79 @@ def check_timeout_retries_and_keeps_previous(tmp: pathlib.Path) -> None:
     assert not merged[1].connected  # 인증 실패는 덮지 않는다
 
 
+def check_claude_shows_new_model_windows(tmp: pathlib.Path) -> None:
+    """목록에 없는 새 모델 한도(seven_day_xxx)도 세부 행으로 나오고, 관계없는 키는 무시해야 한다."""
+    cred = tmp / ".credentials.json"
+    cred.write_text(json.dumps({"claudeAiOauth": {"accessToken": "at"}}), encoding="utf-8")
+    usage = {
+        "five_hour": {"utilization": 10, "resets_at": None},
+        "seven_day_new_model": {"utilization": 25, "resets_at": None},
+        "five_hour_new_model": None,  # 요금제가 안 주면 null — 행을 만들지 않는다
+        "extra_usage": {"utilization": 50},  # 한도 창이 아닌 키
+    }
+    with mock.patch.object(claude, "http_json", lambda url, **kw: usage):
+        st = claude.fetch_claude(cred)
+    rows = {m.key: m for m in st.metrics}
+    assert set(rows) == {"claude.five_hour", "claude.seven_day_new_model"}, rows
+    new_row = rows["claude.seven_day_new_model"]
+    assert new_row.label == "7일 New Model 잔여" and new_row.detail and new_row.remaining_percent == 75.0
+
+
+def check_updater_finds_and_installs(tmp: pathlib.Path) -> None:
+    """새 버전만 받고, 해시가 맞을 때만 exe 를 바꿔치기해야 한다."""
+    exe = tmp / "AIUsageWidget.exe"
+    exe.write_bytes(b"old build")
+    new_bytes = b"new build"
+    new_hash = hashlib.sha256(new_bytes).hexdigest()
+
+    def release(tag, digest):
+        return {"tag_name": tag, "assets": [{
+            "name": "AIUsageWidget.exe", "browser_download_url": "https://example/exe",
+            "digest": f"sha256:{digest}" if digest else None,
+        }]}
+
+    def find(rel):
+        with mock.patch.object(updater, "http_json", lambda url, **kw: rel):
+            return updater.find_update(exe)
+
+    assert updater.parse_version("v1.10.0") > updater.parse_version("1.9.9")
+    assert find(release("v99.0.0", new_hash)) == ("https://example/exe", new_hash)
+    assert find(release(f"v{updater.APP_VERSION}", new_hash)) is None, "같은 버전은 받지 않는다"
+    assert find(release("v99.0.0", None)) is None, "해시 없는 파일은 설치하지 않는다"
+    # APP_VERSION 을 안 올린 채 릴리스해도, 이미 같은 파일이면 무한 재설치하지 않는다.
+    assert find(release("v99.0.0", hashlib.sha256(b"old build").hexdigest())) is None
+
+    def fake_urlopen(body):
+        resp = mock.MagicMock()
+        resp.__enter__.return_value.read.side_effect = [body, b""]
+        return lambda req, timeout: resp
+
+    # 다운로드가 손상됐으면 원래 exe 를 그대로 둔다.
+    with mock.patch.object(updater.urllib.request, "urlopen", fake_urlopen(b"tampered")):
+        assert not updater.install(exe, "https://example/exe", new_hash)
+    assert exe.read_bytes() == b"old build" and not (tmp / "AIUsageWidget.exe.new").exists()
+
+    with mock.patch.object(updater.urllib.request, "urlopen", fake_urlopen(new_bytes)):
+        assert updater.install(exe, "https://example/exe", new_hash)
+    assert exe.read_bytes() == new_bytes
+    assert (tmp / "AIUsageWidget.exe.old").read_bytes() == b"old build"
+
+    # 오프라인이어도 예외가 새어 나와 위젯을 죽이지 않아야 한다.
+    quit_calls = []
+    def offline(url, **kw):
+        raise urllib.error.URLError("offline")
+    with mock.patch.object(updater, "http_json", offline):
+        updater.check_and_update(exe, lambda: quit_calls.append(1))
+    assert not quit_calls
+
+
 if __name__ == "__main__":
     for check in (check_claude_refreshes_expired_token, check_gemini_picks_matching_secret,
                   check_agy_found_on_path, check_login_ignores_stray_requests,
                   check_gemini_falls_back_to_bundled_client, check_gemini_keeps_other_groups_as_detail,
                   check_codex_additional_limits_are_detail, check_display_settings_persist,
-                  check_timeout_retries_and_keeps_previous):
+                  check_timeout_retries_and_keeps_previous, check_claude_shows_new_model_windows,
+                  check_updater_finds_and_installs, check_codex_model_usage_shows_status):
         with tempfile.TemporaryDirectory() as d:
             check(pathlib.Path(d))
         print("OK", check.__name__)
